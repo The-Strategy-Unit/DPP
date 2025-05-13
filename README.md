@@ -103,4 +103,17 @@ These data for these variables need to be downloaded.
 
 - Process all the matching data using `get_matching_variables_df.R`
 
-- 
+### Outcome data
+
+The outcome data was obtained from the
+[CVDPREVENT](https://www.cvdprevent.nhs.uk/) audit via their API.
+
+Use the `get_cvd_data.R` script to download the data.
+
+### Impute missing matching data
+
+- Investigate the amount of missing data using
+  `dpp_matching_variables_missingness.qmd`
+
+- Perform multiple imputation to ‘fill-in’ missing matching data using
+  `dpp_impute_missing_matching_variables.qmd`
