@@ -81,4 +81,10 @@ These data for these variables need to be downloaded.
 
 -   Get matching data from Fingertips using `data_fingertips.R`
 
+-   Download [GP workforce data](https://digital.nhs.uk/data-and-information/publications/statistical/general-and-personal-medical-services/30-april-2023) for April 2023
+
+-   Process GP workforce information using `get_gp_workforce.R`
+
+-   Process all the matching data using `get_matching_variables_df.R`
+
 -   
