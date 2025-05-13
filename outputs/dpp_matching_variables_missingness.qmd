@@ -1,0 +1,1054 @@
+---
+title: "DPP matching variables"
+subtitle: "Assessing missingness in variables used in matching GP practices"
+author: "Craig Parylo"
+date: 2025-01-17
+
+title-block-banner: '#151412'
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    code-fold: true
+    embed-resources: true
+    fig-format: svg
+    fig-width: 10
+    fig-height: 3
+    fig-dpi: 600
+    default-image-extension: svg
+    lightbox: true
+    editor: visual
+brand: _brand.yml
+css: styles.css
+---
+
+```{r setup}
+.libPaths(new = "C:/Users/craig.parylo/AppData/Local/Programs/R/R-4.4.2/library")
+
+# libraries
+
+# data 
+df_matching_missing <- readRDS(file = here::here('data', 'matching', 'df_matching_missing.Rds'))
+
+df_cvd <- readRDS(file = here::here('data', 'cvd_prevent', 'cvd_prevent.Rds'))
+
+matching_variables <- c(
+  'adults_male_prop',
+  'adults_65_plus_prop',
+  'patients_per_clinician',
+  'deprivation_score',
+  'diabetes_prevalence',
+  'hypertension_prevalence',
+  'obesity_prevalence',
+  'rural_code'
+)
+
+matching_outcome_variables <- c(matching_variables, 'flag_outcome_pre', 'flag_outcome_post')
+
+# colours
+chart_colours <- list(
+  'TRUE' = "#0072CE",
+  'FALSE' = "#FFB81C"
+)
+
+# udf
+plot_histogram_matching <- function(df, var, str_title, str_x) {
+  p <-
+    df |> 
+    dplyr::select({{ var }}, flag_intervention) |> 
+    dplyr::filter(is.finite({{ var }})) |> 
+    ggplot2::ggplot(
+      ggplot2::aes(
+        x = {{ var }}, 
+        fill = flag_intervention)
+    ) +
+    ggplot2::geom_histogram(bins = 100) +
+    ggplot2::theme_minimal() +
+    ggplot2::scale_fill_manual(values = chart_colours) +
+    ggplot2::labs(
+      title = str_title,
+      x = str_x,
+      y = 'Count',
+      fill = 'Intervention group'
+    )
+  
+  return(p)
+}
+
+plot_boxplots_matching <- function(df, var, str_title, str_x) {
+  p <- 
+    df |> 
+    dplyr::select({{ var }}, flag_intervention) |> 
+    dplyr::filter(is.finite({{ var }})) |> 
+    ggplot2::ggplot(
+      ggplot2::aes(
+        x = {{ var }},
+        y = flag_intervention,
+        fill = flag_intervention
+      )
+    ) +
+    ggplot2::geom_violin() + 
+    ggplot2::geom_boxplot(fill = 'white', width = 0.2) +
+    ggplot2::theme_minimal() +
+    ggplot2::scale_fill_manual(values = chart_colours) +
+    ggplot2::labs(
+      title = str_title,
+      x = str_x,
+      y = 'Intervention group',
+      fill = 'Intervention group'
+    )
+  
+  return(p)
+}
+
+plot_barplot_matching <- function(df, var, str_title, str_x) {
+  p <- 
+    df |> 
+    dplyr::select({{ var }}, flag_intervention) |>
+    dplyr::filter(is.finite({{ var }})) |> 
+    ggplot2::ggplot(
+      ggplot2::aes(
+        x = {{ var }},
+        fill = flag_intervention
+      )
+    ) + 
+    ggplot2::geom_bar(position = ggplot2::position_dodge()) +
+    ggplot2::theme_minimal() +
+    ggplot2::scale_fill_manual(values = chart_colours)
+  
+  return(p)
+}
+
+summarise_matching <- function(df, var) {
+  # summarise the intervention group
+  intervention <- 
+    df_matching_missing |> 
+    dplyr::filter(flag_intervention == TRUE) |> 
+    dplyr::pull({{ var }}) |> 
+    summary() |> 
+    tibble::enframe() |> 
+    dplyr::rename(intervention = value)
+  
+  # summarise the control group
+  control <-
+    df_matching_missing |> 
+    dplyr::filter(flag_intervention == FALSE) |> 
+    dplyr::pull({{ var }}) |> 
+    summary() |> 
+    tibble::enframe() |> 
+    dplyr::rename(control = value)
+
+  # combine together
+  df_return <- 
+    intervention |> 
+    dplyr::left_join(
+      y = control,
+      by = dplyr::join_by(name == name)
+    ) |> 
+    dplyr::mutate(
+      difference = ((intervention - control) / intervention),
+      difference = glue::glue('{round(difference*100, digits = 1)}%')
+    )
+  
+  return(df_return)
+
+}
+```
+
+# Evaluation framework
+
+The aim of an impact evaluation is to measure how much of any observed change can be attributed to an intervention. To do this, the observed change is compared with an estimate of what would have happened in the absence of the intervention – the counterfactual.
+
+## Outcome data
+
+Two indicators of impact have been selected for this evaluation, which align with the *Detect* and *Protect* pillars. No impact measure was found for the *Perfect* pillar. This will be assessed in the qualitative process evaluation.
+
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------+
+| DPP key lines of enquiry                                                                                                                                                                  | CVDPrevent indicator                                                                                                                                                                                   | Expected variation |
++===========================================================================================================================================================================================+========================================================================================================================================================================================================+====================+
+| **Detect**                                                                                                                                                                                | CVDP001AF: Prevalence of GP recorded AF in patients aged 18 and over                                                                                                                                   | Will be increased  |
+|                                                                                                                                                                                           |                                                                                                                                                                                                        |                    |
+| Reduce incidence of stroke by diagnosing more patients with AF                                                                                                                            |                                                                                                                                                                                                        |                    |
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------+
+| **Protect**                                                                                                                                                                               | CVDP002AF: Percentage of patients aged 18 and over with GP recorded atrial fibrillation and a record of a CHA2DS2-VASc score of 2 or more, who are currently treated with anticoagulation drug therapy | Will be increased  |
+|                                                                                                                                                                                           |                                                                                                                                                                                                        |                    |
+| Ensure patients diagnosed with AF are offered anticoagulation, where appropriate                                                                                                          |                                                                                                                                                                                                        |                    |
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------+
+| **Perfect**                                                                                                                                                                               | No outcome measure identified                                                                                                                                                                          |                    |
+|                                                                                                                                                                                           |                                                                                                                                                                                                        |                    |
+| Ensure patients with AF are on the correct dose of the best value DOAC (edoxaban), where clinically appropriate. If edoxaban is not clinically appropriate, consider an alternative DOAC. |                                                                                                                                                                                                        |                    |
++-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------+--------------------+
+
+: Outcome indicators aligned with KLoE
+
+Two other relevant CVDPrevent indicators have been excluded:
+
+-   CVDP004AF: Percentage of patients aged 18 and over with GP recorded AF whose latest CHADS2 or CHA2DS2-VASc is less than 2 or there is no CHADS2 or CHA2DS2-VASc score recorded, in whom stroke risk has been assessed using the CHA2DS2-VASc score risk stratification scoring system in the preceding 12 months (excluding those patients currently receiving oral anticoagulants)
+
+-   CVDP005AF: Percentage of patients aged 18 and over, with GP recorded AF and with a CHADS2 or CHA2DS2-VASc score of 2 or more, who were prescribed a direct-acting oral anticoagulant (DOAC), or, where a DOAC was declined, not indicated or contra-indicated, a vitamin K antagonist.
+
+These are new indicators with data available from March 2024 onwards; as there will be no pre-intervention data available it is not possible to use these outcomes for this evaluation.
+
+## Method
+
+The method for this evaluation will be a Propensity Score Matched Difference-in-Difference (PSM-DiD).
+
+A DiD approach compares the change in an outcome, or outcomes, over time between a group that received an intervention and a group that did not receive the intervention (see figure @fig-did).
+
+![Illustration of a Difference-in-Differences (DiD) design](images/clipboard-2394687571.png){#fig-did}
+
+Each DPP initiative selected for inclusion in this evaluation will be evaluated separately. The GP practices (for example) delivering a selected initiative will form the intervention group and the comparison group will be a matching set of practices that have not been part of any DPP initiative.
+
+The aim is that the difference observed in the change in outcomes between these two groups can be causally attributed to the intervention (i.e. the activities made possible by the DPP initiative grant).
+
+A matched DiD approach improves this basic design by increasing the similarity between the intervention and comparison groups on some observed factors. This reduces the likelihood that any observed difference in outcome in the intervention group is due to selection bias.
+
+Selection bias can arise if, for example, initiatives in areas of lower deprivation are more motivated to apply for DPP funding than groups in areas of higher deprivation. Without controlling for deprivation, it can be harder to infer causality for any observed intervention effect as the difference may be due to factors other than the intervention.
+
+Propensity Score Matching (PSM) is a method of matching groups based on multiple variables. Each group will have a set of observable characteristics – such as registered population size, relative deprivation, rurality, age profile – which are likely to have an influence on their performance in the outcome measures. The matching characteristics will be agreed with NHS England before the analysis.
+
+Using PSM these characteristics can be combined into a single propensity score for each group which can be used to match intervention groups with the nearest comparator group (see @fig-psm).
+
+![Illustration of Propensity Score Matching (PSM)](images/clipboard-1369578902.png){#fig-psm}
+
+The PSM-DiD approach is appropriate for this evaluation as it:
+
+-   Is a robust quasi-experimental research approach
+
+-   Requires data on the outcome variables for two points in time – before and after the intervention – for both the intervention and comparator group, which is feasible from a review of the data available from the CVDPrevent audit
+
+-   Is likely we can access counterfactuals from the wide range of GP practices that participate in the CVDPrevent audit.
+
+## Delivery plan
+
+![Impact analysis delivery plan](images/clipboard-703227806.png){#tab-devlieryplan}
+
+## Risks
+
+Not all GP practices contribute to the CVDPrevent audit, and a small amount of data is missing for those who do submit. In the initial extract (June 2022) 79% of practices submitted data. Of those who did submit, around 0.05% of records were [missing values](https://data.cvdprevent.nhs.uk/quality-improvement?period=17&level=1&area=8030&metadata=1#1).
+
+Whilst unlikely, it is possible suitable matches cannot be found for all intervention groups. Where this is the case then options include excluding the unmatched groups from the impact analysis or constructing a synthetic control (see below).
+
+DiD relies on an important assumption that the intervention and control groups have a constant difference in the pre-intervention period. This is known as the parallel trends assumption, and violation will lead to biased estimates of the causal effect. Assessment of parallel trends is done visually as there is no statistical test for it. If this assumption is breached, then the treatment group will be excluded from the analysis.
+
+## Other approaches considered
+
+Other quasi-experimental methods considered for this evaluation include Synthetic Controls and Interrupted Time Series analysis, further details of these can be found in the [Magenta Book](https://www.gov.uk/government/publications/the-magenta-book).
+
+### Synthetic controls
+
+Synthetic Controls is a technique that uses historical data to create a ‘synthetic clone’ of the intervention group using pre-intervention data which is then used as the counterfactual against which observed outcomes are compared.
+
+The synthetic controls approach is useful where no single equivalent comparison group is available for the intervention, so a weighted combination of multiple comparison groups is constructed to be like the intervention group, for example on population size, demographics or geography.
+
+This approach was not selected because it is likely that suitable comparison groups can be found for each intervention group, so a synthetic model approach is not required. Initial feasibility analysis indicates 43% of GP practices are unexposed to a DPP initiative, and 47% of PCNs, indicating there are significant pools of groups from which comparison groups can be found.
+
+### Interrupted Time Series (ITS) analysis
+
+ITS analysis is a robust technique that uses a sequence of observations measured before and after an intervention. The effect of the intervention is measured by changes to the slope and level of the time series’ trend lines.
+
+This approach can be used without a comparison group with the pre-intervention period acting as counterfactual, or it can be used with a comparison group in a similar way to the DiD approach.
+
+This approach was not selected because there are not enough post-intervention observations. ITS require a minimum of three observations prior to and after the intervention, ideally more than this, to generate reliable trend lines.
+
+# Matching
+
+Matching is a non-experimental causal inference technique. It attempts to balance the treatment and control groups on confounding factors to make them comparable so that we can draw conclusions about the causal impact of a treatment on the outcome using observational data.
+
+## Selecting matching variables
+
+The following factors were selected as candidate variables for use when matching GP practices in interventions areas with GP practices in areas free from DPP funding initiatives.
+
+These factors were identified from the Clinical Knowledge Summary on [atrial fibrillation](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) produced by the National Institute for Health and Care Excellence (NICE).
+
+The list of factors was shortlisted based on:
+
+-   factors likely to be independent of AF incidence,
+
+-   data is available at GP practice level,
+
+-   data is available for the pre-intervention period (around 2022-23 financial year).
+
+### Socio-economic factors
+
+#### Registered practice population per FTE clinician
+
+::: panel-tabset
+##### Population
+
+The number of patients per clinical WTE can be a marker for [a range of factors](https://www.ons.gov.uk/peoplepopulationandcommunity/healthandsocialcare/healthcaresystem/articles/trendsinpatienttostaffnumbersatgppracticesinengland/2022) such as funding available to the practice, presence of other clinical staff, clinical needs of the local population and changes in the local population. Data comes from [GP workforce data](https://digital.nhs.uk/data-and-information/publications/statistical/general-and-personal-medical-services/30-april-2023) published by NHS Digital for April 2023.
+
+At the December Steering Group it was agreed to use the ratio of patients to all clinical staff at each practice with the rationale that care of AF is often delegated to non-medical staff.
+
+This variable is defined as the number of registered adult patients (aged 18+) divided by the total working time equivalent (WTE) for clinical staff at the practice, defined as the total WTE for GPs (including trainees), Nursing staff and Direct Patient Care staff (DPC).
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = patients_per_clinician,
+  str_title = "Patients per clinician",
+  str_x = "Patients per clinician (log10 scale)"
+) +
+  ggplot2::scale_x_log10()
+plotly::ggplotly(p)
+```
+
+The number of patients per clinician is highly left skewed with most practices having around 700 - 1,700 patients per clinician, but some seemingly have tens of thousands of patients per WTE.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = patients_per_clinician,
+  str_title = "Patients per clinician",
+  str_x = "Patients per clinician (log10 scale)"
+) +
+  ggplot2::scale_x_log10()
+p
+```
+
+The intervention group has practices with some of the more extreme counts of patients per clinician.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = patients_per_clinician) |> 
+  reactable::reactable(sortable = FALSE)
+```
+:::
+
+#### Weighted deprivation score per practice
+
+::: panel-tabset
+##### Deprivation
+
+Greater socio-economic deprivation is associated with poorer outcomes across a [range of health issues](https://www.thelancet.com/journals/lanpub/article/PIIS2468-2667(18)30200-7/fulltext), including [Atrial Fibrillation](https://pubmed.ncbi.nlm.nih.gov/36465437/). Data comes from 2019 indices of multiple deprivation (IMD) population weighted score for patients registered at each practice by [Fingertips](https://fingertips.phe.org.uk/search/deprivation#page/6/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/93553/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1/page-options/car-do-0).
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = deprivation_score,
+  str_title = 'Deprivation scores',
+  str_x = 'Deprivation score per practice'
+)
+plotly::ggplotly(p)
+```
+
+Deprivation score are slightly lower for the intervention group than the control group GP practices.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = deprivation_score,
+  str_title = 'Deprivation scores',
+  str_x = 'Deprivation score per practice'
+)
+p
+```
+
+The intervention group GP practices are slightly less deprived (as a whole) than the control group.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = deprivation_score) |> 
+  reactable::reactable(sortable = FALSE)
+```
+:::
+
+#### Rurality of the practice
+
+::: panel-tabset
+##### Rurality
+
+[Distance can be a barrier](https://ij-healthgeographics.biomedcentral.com/articles/10.1186/1476-072X-3-21) to accessing healthcare. Rurality can be a proxy measure for ease of healthcare access and has [implications in the care of people with atrial fibrillation](https://www.nature.com/articles/s41569-021-00561-0). Data is based on the 10-step [rural-urban classification](https://www.ons.gov.uk/methodology/geography/geographicalproducts/ruralurbanclassifications) of practices based on the practice postcode.
+
+##### Classification
+
++----------------+----------------------------------------------------+------------+
+| Classification | Description                                        | Code       |
++================+====================================================+============+
+| Urban          | Major Conurbation                                  | A1         |
++----------------+----------------------------------------------------+------------+
+| Urban          | Minor Conurbation                                  | B1         |
++----------------+----------------------------------------------------+------------+
+| Urban          | City and Town                                      | C1         |
++----------------+----------------------------------------------------+------------+
+| Urban          | City and Town in a Sparse Setting                  | C2         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Town and Fringe                                    | D1         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Town and Fringe in a Sparse Setting                | D2         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Village                                            | E1         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Village in a Sparse Setting                        | E2         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Hamlets and Isolated Dwellings                     | F1         |
++----------------+----------------------------------------------------+------------+
+| Rural          | Hamlets and Isolated Dwellings in a Sparse Setting | F2         |
++----------------+----------------------------------------------------+------------+
+
+: Rural-Urban classification
+
+##### Bar
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_barplot_matching(
+  df = df_matching_missing,
+  var = rural_code,
+  str_title = "Distribution of urban-rural classification",
+  str_x = "Rural code"
+)
+plotly::ggplotly(p)
+```
+
+The intervention group is comprised of more `Urban` practices (A1:C2) than the control group and the corollary that the control group has a greater proportion of `Rural` practices.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = rural_code) |> 
+  reactable::reactable(sortable = FALSE)
+```
+:::
+
+### Clinical risk factors
+
+#### Increasing age
+
+::: panel-tabset
+##### Age
+
+The risk of developing AF doubles with each progressive decade and exceeds 20% by age 80 years. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population who are aged 65-years and above.
+
+The 65-year threshold, though somewhat arbitrary, was determined in consultation with the DPP Steering Group.
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = adults_65_plus_prop,
+  str_title = "Proportion of patients aged 65+ years",
+  str_x = "Proportion of 65+ year-old patients"
+)
+plotly::ggplotly(p)
+```
+
+There is a left-skew for both intervention and control groups indicating some practices have a very high proportion of elderly patients, possibly practices oriented around care homes.
+
+Both groups exhibit similar distributions in proportions.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = adults_65_plus_prop,
+  str_title = "Proportion of patients aged 65+ years",
+  str_x = "Proportion of 65+ year-old patients"
+)
+p
+```
+
+Intervention and control groups appear to have similar distributions of patients aged 65+ years registered. The intervention group appears to have more outliers with very high proportions of these patients.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = adults_65_plus_prop) |> 
+  reactable::reactable(sortable = FALSE)
+```
+:::
+
+#### Obesity prevalence
+
+::: panel-tabset
+##### Obesity
+
+[Obesity is an independent risk factor](https://pmc.ncbi.nlm.nih.gov/articles/PMC8576485/) for the development of AF. Data comes from the 2022/23 prevalence of obesity (QoF) - defined as the percentage of adult patients with a BMI greater than or equal to 30 - via [Fingertips](https://fingertips.phe.org.uk/search/obesity#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/92588/age/168/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = obesity_prevalence,
+  str_title = "Proportion of patients with BMI >= 30",
+  str_x = "Proportion of patients with BMI >= 30"
+)
+plotly::ggplotly(p)
+```
+
+The distributions between the two groups appear to be similar to each other, peaking around the 11% mark. There is some left-skew with some practices having a larger proportion of patients known to be obese.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = obesity_prevalence,
+  str_title = "Proportion of patients with BMI >= 30",
+  str_x = "Proportion of patients with BMI >= 30"
+)
+p
+```
+
+Both groups exhibit similar distributions.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = obesity_prevalence) |> 
+  reactable::reactable(sortable = FALSE)
+```
+
+There are more `NA` values in the control group.
+:::
+
+#### Diabetes prevalence
+
+::: panel-tabset
+##### Diabetes
+
+[Diabetes is an independent risk factor](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) for AF, especially in young people. Prevalence is at least two-fold higher in people with diabetes compared with people without diabetes. Data is defined QoF measure of prevalence of diabetes mellitus in GP registered population aged 17 years or older for 2022/23 - data taken from [Fingertips](https://fingertips.phe.org.uk/search/diabetes#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/241/age/187/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = diabetes_prevalence,
+  str_title = "Proportion of patients with diabetes mellitus",
+  str_x = "Proportion of patients with diabetes mellitus"
+)
+plotly::ggplotly(p)
+```
+
+Both groups show similar distributions in the proportion of patients with diabetes.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = diabetes_prevalence,
+  str_title = "Proportion of patients with diabetes mellitus",
+  str_x = "Proportion of patients with diabetes mellitus"
+)
+p
+```
+
+Both groups appear to be similarly matched for this measure, though the control group has some practices with very high proportions of patients with diabetes than in the control group.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = diabetes_prevalence) |> 
+  reactable::reactable(sortable = FALSE)
+```
+
+Both groups appear to be similarly matched. The large difference in the maximum value, detected in the Box plots, is also visible. Also present is the control group has more missing values than the intervention group.
+:::
+
+#### Hypertension prevalence
+
+::: panel-tabset
+##### Hypertension
+
+People with hypertension have a [1.7-fold higher risk of developing AF](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) compared with people with blood pressure in the normal range. Source is QOF data taken from [Fingertips](https://fingertips.phe.org.uk/search/hypertension#page/4/gid/1/pat/159/par/K02000001/ati/15/are/E92000001/iid/219/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1) and defined as the all-age prevalence in 2022-23.
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = hypertension_prevalence,
+  str_title = "Proportion of patients with hypertension",
+  str_x = "Proportion of patients with hypertension"
+)
+plotly::ggplotly(p)
+```
+
+Both groups demonstrate similar distributions, though significant left skew in both implying some practices have high proportions (60% and over) with hypertension.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = hypertension_prevalence,
+  str_title = "Proportion of patients with hypertension",
+  str_x = "Proportion of patients with hypertension"
+)
+p
+```
+
+The distributions appear similar in both groups, though the intervention group more practices with high proportions of hypertension than in the control group.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = hypertension_prevalence) |> 
+  reactable::reactable(sortable = FALSE)
+```
+
+Distributions appear similar, big difference noted in the maximum values - as detected in the boxplots. Also visible is the higher proportion of missing values in the control group.
+:::
+
+#### Gender proportion
+
+::: panel-tabset
+##### Gender
+
+[Age-adjusted incidence, prevalence and lifetime risk of AF is higher in men](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/prevalence/) compared with women. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population recorded as being male.
+
+##### Histogram
+
+```{r}
+#| fig.height: 4
+#| warning: false
+#| message: false
+
+p <- plot_histogram_matching(
+  df = df_matching_missing,
+  var = adults_male_prop,
+  str_title = "Proportion of patients who are male",
+  str_x = "Proportion of patients who are male"
+)
+plotly::ggplotly(p)
+```
+
+Both distributions show a narrow range of proportion of male patients, as expected around the 50% mark. There appear to be outlying practices with very few and majority male patients.
+
+##### Box & Violin
+
+```{r}
+#| warning: false
+#| message: false
+p <- plot_boxplots_matching(
+  df = df_matching_missing,
+  var = adults_male_prop,
+  str_title = "Proportion of patients who are male",
+  str_x = "Proportion of patients who are male"
+)
+p
+```
+
+The control group has some practices with lower proportions of male patients than the intervention group has.
+
+##### Summary
+
+```{r}
+summarise_matching(df = df_matching_missing, var = adults_male_prop) |> 
+  reactable::reactable(sortable = FALSE)
+```
+
+The distributional measures appear similar for both groups. There are practices in both groups with 100% male populations.
+:::
+
+## Missingness of matching variables
+
+The above review highlighted a small proportion of the matching variables are missing data across both control and intervention groups.
+
+```{r}
+#| fig-cap: Distribution of missing values for matching variables
+#| fig-height: 5
+#| fig-format: png
+#| fig-dpi: 600
+#| lightbox:
+
+df_matching_missing |> 
+  dplyr::select(dplyr::any_of(matching_variables)) |> 
+  finalfit::missing_plot() +
+  ggplot2::theme_minimal(base_size = 16) +
+  ggplot2::scale_fill_continuous(low = "#2c2825", high = "white")
+```
+
+This plot shows the distribution of missing values across the matching variables.
+
+Each of the 6.4k GP practices in both the control and intervention group are represented as 'observations' on the x-axis, withthe y-axis showing each of the matching variables.
+
+Dark blue colours indicate where a practice has data for the matching variable and light blue colours indicate where data is missing.
+
+We can see the variables affected by missingness include:
+
+-   QoF variables - prevalence of diabetes, obesity and hypertension,
+
+-   deprivation scores, and
+
+-   patients per clinician
+
+It is also clear that these values tend to be missing together for the same practice - note the presence of the long light-blue lines indicating multiple missing values.
+
+```{r}
+#| warning: false
+#| message: false
+#| echo: false
+#| error: false
+#| fig-cap: Patterns of missingness in the matching variables
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 6
+#| lightbox:
+p <- df_matching_missing |> 
+  dplyr::select(dplyr::any_of(matching_variables)) |> 
+  finalfit::missing_pattern(matching_variables) |> 
+  ggplot2::theme_minimal(base_size = 14)
+
+
+```
+
+In this plot blue squares indicate a group of GP practices that have complete data, whilst Red squares indicate GP practices with values missing.
+
+The matching variables are listed along the top of the x-axis and the count of GP practices with missing values for each variable is shown along the bottom of the x-axis.
+
+The pattern of missingness is shown in each row, summarised as:
+
+-   6,233 GP practices have data for all eight matching variables,
+
+-   14 GP practices have data for seven matching variables but missing values for `deprivation`,
+
+-   3 GP practices are missing data for `diabetes`, `hypertension` and `obesity`,
+
+-   123 GP practices are missing data for `diabetes`, `hypertension`, `obesity` and `deprivation`,
+
+-   3 GP practices are missing data for the number of `patients per clinician`,
+
+-   43 GP practices are missing for five variables; `patients per clinician`, `diabetes`, `hypertension`, `obesity` and `deprivation`.
+
+### Missingness per group
+
+There is a lower level of missingness in the intervention group compared with the control group.
+
+Missingness affects five matching variables in both groups (`patients_per_clinician`, `deprivation_score`, `diabetes_prevalence`, `hypertension_prevalence`, and `obesity_prevalence`).
+
+In the intervention group the maximum rate of missingness is **1.2%** in `deprivation_score`, whereas the maximum rate of missingness in the control group is **4.8%** which affects `deprivation_score`, `deprivation_score`, `diabetes_prevalence` and `obesity_prevalence`.
+
+```{r}
+#| fig.cap: Missingness in the intervention group
+
+df_matching_missing |> 
+  dplyr::filter(flag_intervention == TRUE) |> 
+  finalfit::missing_glimpse(matching_variables) |>
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100) |> 
+  reactable::reactable(
+    rownames = FALSE,
+    fullWidth = FALSE,
+    columns = list(
+      label = reactable::colDef(name = 'Matching variable', minWidth = 250),
+      var_type = reactable::colDef(name = 'Type'),
+      n = reactable::colDef(format = reactable::colFormat(separators = TRUE), width = 100),
+      missing_n = reactable::colDef(name = 'missing count'),
+      missing_percent = reactable::colDef(
+        name = 'missing percent', 
+        format = reactable::colFormat(percent = TRUE, digits = 1)
+      )
+    )
+  )
+```
+
+```{r}
+#| fig.cap: Missingness in the control group
+df_matching_missing |> 
+  dplyr::filter(flag_intervention == FALSE) |> 
+  finalfit::missing_glimpse(matching_variables) |>
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100) |> 
+  reactable::reactable(
+    rownames = FALSE,
+    fullWidth = FALSE,
+    columns = list(
+      label = reactable::colDef(name = 'Matching variable', minWidth = 250),
+      var_type = reactable::colDef(name = 'Type'),
+      n = reactable::colDef(format = reactable::colFormat(separators = TRUE), width = 100),
+      missing_n = reactable::colDef(name = 'missing count'),
+      missing_percent = reactable::colDef(
+        name = 'missing percent', 
+        format = reactable::colFormat(percent = TRUE, digits = 1)
+      )
+    )
+  )
+```
+
+The pattern of multiple values being missing for individual practices continues for the intervention and control groups (rather than being randomly scattered across each group).
+
+```{r}
+#| fig.cap: Distribution of missing values in each of the groups
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 6
+#| lightbox:
+p1 <-
+  df_matching_missing |> 
+  dplyr::filter(flag_intervention == TRUE) |> 
+  finalfit::missing_plot(matching_variables) +
+  ggplot2::labs(title = 'Intervention group missing values map') +
+  ggplot2::scale_fill_continuous(low = "#2c2825", high = "white")
+
+p2 <-
+  df_matching_missing |> 
+  dplyr::filter(flag_intervention == FALSE) |> 
+  finalfit::missing_plot(matching_variables) +
+  ggplot2::labs(title = 'Control group missing values map') +
+  ggplot2::scale_fill_continuous(low = "#2c2825", high = "white")
+
+library(patchwork)
+p1 / p2
+
+```
+
+::: callout-note
+## Decision on matching variables
+
+Matching variables are important to ensure balance in potential confounders between intervention and control groups.
+
+I wish to maximise the number of practices in the intervention group that are matched with practices from the control group. Doing so will increase the likelihood that all practices in selected projects will be included in the evaluation.
+
+Any missing value will result in [{MatchIt}](https://kosukeimai.github.io/MatchIt/index.html) excluding those records from the matching process.
+
+The following approach will be taken:
+
+-   Practices with missing values from the control group will be excluded.
+
+-   Practices with missing values from the intervention group will have their missing values imputed
+
+<https://stats.stackexchange.com/questions/468531/matching-when-there-are-missing-data>
+
+<https://psycnet.apa.org/fulltext/2016-12364-001.pdf?auth_token=d224fbfc40c40ca2404783d625382d419e2b30b1> (a copy of this paper is saved under 'data', 'reference')
+
+looking at using {mice} package to do multiple imputation of missing values.
+:::
+
+```{r}
+df_matching_missing |> 
+  mice::mice()
+```
+
+### Outcome data missingness
+
+Only GP practices with outcome data can be included in this evaluation, specifically outcome data before the intervention (DPP funding) was introduced and outcome data afterwards. These are the core data requirements for a Differences-in-Differences analytical approach.
+
+The pre-intervention period is defined as the end of **March 2023**. This coincides with the time periods of much of the matching variables data, the main exception being the weighted deprivation profile for each practice, which was determined in April 2019 and represents the latest available data.
+
+The post-intervention period is defined as **September 2024**. This is the latest available snapshot from the [CVD Prevent](https://www.cvdprevent.nhs.uk/) audit website, at the time of writing in January 2025.
+
+```{r}
+#| fig.cap: Missingness including outcome variables
+
+df_matching_missing |> 
+  finalfit::missing_glimpse(matching_outcome_variables) |> 
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    label = "Matching / Outcome variable",
+    var_type = "Type",
+    missing_n = "Missing (n)",
+    missing_percent = "Missing percent"
+  ) |> 
+  gt::fmt_number(columns = n, sep_mark = ',', decimals = 0) |> 
+  gt::fmt_percent(columns = missing_percent, decimals = 1) |> 
+  gtExtras::gt_highlight_rows(
+    rows = label %in% c('flag_outcome_pre', 'flag_outcome_post'),
+    fill = '#fbc531',
+    alpha = 0.4,
+    font_weight = 'normal'
+  )
+```
+
+The outcome variables have more missing information than the matching variables. The post-intervention outcome data, in particular is missing in 5.7% of GP practices.
+
+```{r}
+#| fig.cap: Distribution of missing values for matching and outcome variables
+#| fig-height: 5
+#| fig-format: png
+#| fig-dpi: 600
+
+df_matching_missing |> 
+  finalfit::missing_plot(matching_outcome_variables)
+```
+
+Whilst there is some overlap between missing matching variables and the missing outcome variables, the majority of missing outcome data appears independent of matching variables.
+
+It is interesting to note there is some overlap in missingness between the two outcome variables but this is not consistent, with lots of missing values for one outcome time period and not the other.
+
+#### Missingness in outcome data per group
+
+```{r}
+#| fig.cap: Missingness in the intervention group
+
+df_matching_missing |> 
+  dplyr::filter(flag_intervention == TRUE) |> 
+  finalfit::missing_glimpse(matching_outcome_variables) |>
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    label = "Matching / Outcome variable",
+    var_type = "Type",
+    missing_n = "Missing (n)",
+    missing_percent = "Missing percent"
+  ) |> 
+  gt::fmt_number(columns = n, sep_mark = ',', decimals = 0) |> 
+  gt::fmt_percent(columns = missing_percent, decimals = 1) |> 
+  gtExtras::gt_highlight_rows(
+    rows = label %in% c('flag_outcome_pre', 'flag_outcome_post'),
+    fill = '#fbc531',
+    alpha = 0.4,
+    font_weight = 'normal'
+  )
+
+```
+
+There are fewer missing outcome data in the intervention group than in the control group
+
+```{r}
+#| fig.cap: Missingness in the control group
+
+df_matching_missing |> 
+  dplyr::filter(flag_intervention == FALSE) |> 
+  finalfit::missing_glimpse(matching_outcome_variables) |>
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    label = "Matching / Outcome variable",
+    var_type = "Type",
+    missing_n = "Missing (n)",
+    missing_percent = "Missing percent"
+  ) |> 
+  gt::fmt_number(columns = n, sep_mark = ',', decimals = 0) |> 
+  gt::fmt_percent(columns = missing_percent, decimals = 1) |> 
+  gtExtras::gt_highlight_rows(
+    rows = label %in% c('flag_outcome_pre', 'flag_outcome_post'),
+    fill = '#fbc531',
+    alpha = 0.4,
+    font_weight = 'normal'
+  )
+
+```
+
+NB, missingness could be explained by:
+
+-   data suppression for low values - the CVD Prevent audit suppress values less than 7 when provided at 'sub-national' level,
+-   The practice did not participate in the audit
+
+It is also worth noting that where values are provided the numerator and denominators are rounded to the nearest 5 when reporting sub-national geographies.
+
+#### Can missing outcomes data be handled?
+
+If a GP practice is missing data for an outcome variable (pre- or post-intervention), can this value be obtained from the previous time period as next-best solution?
+
+```{r}
+# how many practices *dont* have outcome for June 2024, but *do* for March 2024?
+
+# don't have an outcome (n = 366)
+temp_no_out_tp20 <-
+  df_matching_missing |> 
+  dplyr::filter(is.na(flag_outcome_post))
+
+# of these that have a value in tp 18 (n = 24)
+temp_out_t18 <-
+  df_cvd |> 
+  dplyr::filter(
+    area_code %in% temp_no_out_tp20$prac_code,
+    indicator_code == 'CVDP002AF',
+    time_period_id == 18,
+    !is.na(numerator)
+  )
+# about 24 of 366 where we can find an outcome for the previous time period
+
+# how many practices *don't* have outcome for Mar 2023, but *do* for Dec 2022 (tp 7)
+temp_no_out_tp8 <-
+  df_matching_missing |> 
+  dplyr::filter(is.na(flag_outcome_pre))
+
+temp_out_t7 <-
+  df_cvd |> 
+  dplyr::filter(
+    area_code %in% temp_no_out_tp8$prac_code,
+    indicator_code == 'CVDP002AF',
+    time_period_id == 7,
+    !is.na(numerator)
+  )
+# so 43 out of 260 where we can find an outcome for the previous time period.
+# Not game changing but could be beneficial if our study sites are among these.
+
+# summarise in a tibble
+#df_potential_reclamation <- 
+dplyr::tribble(
+  ~period, ~missing_values, ~available_from_previous_time_period,
+  "Pre-intervention", length(temp_no_out_tp8$prac_code), length(temp_out_t7$area_code),
+  "Post-intervention", length(temp_no_out_tp20$prac_code), length(temp_out_t18$area_code)
+) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    period = "Outcome time period",
+    missing_values = "Practices without a value",
+    available_from_previous_time_period = "Value found in previous period"
+  )
+
+```
+
+260 practices are missing outcome data in the pre-intervention period (March 2023), of which 43 (17%) can be found in the previous time period (December 2022).
+
+366 practices are missing outcome data in the post-intervention period (September 2024), of which 24 (7%) can be found in the previous time period (June 2024).
+
+Referring to the previous time period to fill in gaps in outcome data are not a catch-all solution and may present issues when comparing outcomes between an intervention and control group.
+
+::: callout-note
+## Decision on outcome measures
+
+Outcomes are central to this impact evaluation. The absence of an outcome for either the pre- or post-intervention period for any given practice means the impact cannot be assessed for that practice.
+
+A feasibility review found that looking to plug any gaps with outcomes from previous time periods is limited in effectiveness, improving coverage by 7-17% but introduces some methodological issues around comparing practices on different time periods.
+
+Therefore, practices with missing data for either pre- or post-implementation outcomes will be excluded.
+:::
