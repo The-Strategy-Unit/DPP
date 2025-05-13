@@ -1,0 +1,61 @@
+---
+title: "dpp_selecting_factors_for_matching"
+format: 
+  html:
+    toc: true
+editor: visual
+---
+
+```{r}
+
+```
+
+## Selecting factors for matching process
+
+The following factors were selected as candidate variables for use when matching GP practices in interventions areas with GP practices in areas free from DPP funding initiatives.
+
+These factors were identified from the Clinical Knowledge Summary on [atrial fibrillation](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) produced by the National Institute for Health and Care Excellence (NICE).
+
+The list of factors was shortlisted based on:
+
+-   factors likely to be independent of AF incidence,
+
+-   data is available at GP practice level,
+
+-   data is available for the pre-intervention period (around 2022-23 financial year).
+
+### Socio-economic factors
+
+-   Registered practice population per FTE GP,[^1]
+
+-   Deprivation score for the practice,[^2]
+
+-   Rurality,[^3]
+
+[^1]: The number of patients per GP WTE can be a marker for [a range of factors](https://www.ons.gov.uk/peoplepopulationandcommunity/healthandsocialcare/healthcaresystem/articles/trendsinpatienttostaffnumbersatgppracticesinengland/2022) such as funding available to the practice, presence of other clinical staff, clinical needs of the local population and changes in the local population. Data comes from [GP workforce data](https://digital.nhs.uk/data-and-information/publications/statistical/general-and-personal-medical-services/30-april-2023) published by NHS Digital for April 2023.
+
+[^2]: Greater socio-economic deprivation is associated with poorer outcomes across a [range of health issues](https://www.thelancet.com/journals/lanpub/article/PIIS2468-2667(18)30200-7/fulltext), including [Atrial Fibrillation](https://pubmed.ncbi.nlm.nih.gov/36465437/). Data comes from 2019 indices of multiple deprivation (IMD) population weighted score for patients registered at each practice by [Fingertips](https://fingertips.phe.org.uk/search/deprivation#page/6/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/93553/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1/page-options/car-do-0).
+
+[^3]: [Distance can be a barrier](https://ij-healthgeographics.biomedcentral.com/articles/10.1186/1476-072X-3-21) to accessing healthcare. Rurality can be a proxy measure for ease of healthcare access and has [implications in the care of people with atrial fibrillation](https://www.nature.com/articles/s41569-021-00561-0). Data is based on the 8-step [rural-urban classification](https://www.ons.gov.uk/methodology/geography/geographicalproducts/ruralurbanclassifications) of practices based on the practice postcode.
+
+### Clinical risk factors
+
+-   Increasing age,[^4]
+
+-   Obesity prevalence,[^5]
+
+-   Diabetes prevalence,[^6]
+
+-   Hypertension prevalence,[^7]
+
+-   Gender proportion.[^8]
+
+[^4]: The risk of developing AF doubles with each progressive decade and exceeds 20% by age 80 years. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population who are aged 80-years and above. The 80-year threshold was identified from [this paper](https://pmc.ncbi.nlm.nih.gov/articles/PMC5460064/)), though this may be somewhat arbitrary.
+
+[^5]: [Obesity is an independent risk factor](https://pmc.ncbi.nlm.nih.gov/articles/PMC8576485/) for the development of AF. Data comes from the 2022/23 prevalence of obesity (QoF) - defined as the percentage of adult patients with a BMI greater than or equal to 30 - via [Fingertips](https://fingertips.phe.org.uk/search/obesity#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/92588/age/168/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+[^6]: [Diabetes is an independent risk factor](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) for AF, especially in young people. Prevalence is at least two-fold higher in people with diabetes compared with people without diabetes. Data is defined QoF measure of prevalence of diabetes mellitus in GP registered population aged 17 years or older for 2022/23 - data taken from [Fingertips](https://fingertips.phe.org.uk/search/diabetes#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/241/age/187/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+[^7]: People with hypertension have a [1.7-fold higher risk of developing AF](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) compared with people with blood pressure in the normal range. Source is QOF data taken from [Fingertips](https://fingertips.phe.org.uk/search/hypertension#page/4/gid/1/pat/159/par/K02000001/ati/15/are/E92000001/iid/219/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1) and defined as the all-age prevalence in 2022-23.
+
+[^8]: [Age-adjusted incidence, prevalence and lifetime risk of AF is higher in men](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/prevalence/) compared with women. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population recorded as being male.
