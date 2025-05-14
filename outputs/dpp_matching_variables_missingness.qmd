@@ -386,29 +386,18 @@ summarise_matching(df = df_matching_missing, var = deprivation_score) |>
 
 ##### Classification
 
-+----------------+----------------------------------------------------+------------+
-| Classification | Description                                        | Code       |
-+================+====================================================+============+
-| Urban          | Major Conurbation                                  | A1         |
-+----------------+----------------------------------------------------+------------+
-| Urban          | Minor Conurbation                                  | B1         |
-+----------------+----------------------------------------------------+------------+
-| Urban          | City and Town                                      | C1         |
-+----------------+----------------------------------------------------+------------+
-| Urban          | City and Town in a Sparse Setting                  | C2         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Town and Fringe                                    | D1         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Town and Fringe in a Sparse Setting                | D2         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Village                                            | E1         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Village in a Sparse Setting                        | E2         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Hamlets and Isolated Dwellings                     | F1         |
-+----------------+----------------------------------------------------+------------+
-| Rural          | Hamlets and Isolated Dwellings in a Sparse Setting | F2         |
-+----------------+----------------------------------------------------+------------+
+| Classification | Description                                        | Code |
+|----------------|----------------------------------------------------|------|
+| Urban          | Major Conurbation                                  | A1   |
+| Urban          | Minor Conurbation                                  | B1   |
+| Urban          | City and Town                                      | C1   |
+| Urban          | City and Town in a Sparse Setting                  | C2   |
+| Rural          | Town and Fringe                                    | D1   |
+| Rural          | Town and Fringe in a Sparse Setting                | D2   |
+| Rural          | Village                                            | E1   |
+| Rural          | Village in a Sparse Setting                        | E2   |
+| Rural          | Hamlets and Isolated Dwellings                     | F1   |
+| Rural          | Hamlets and Isolated Dwellings in a Sparse Setting | F2   |
 
 : Rural-Urban classification
 
