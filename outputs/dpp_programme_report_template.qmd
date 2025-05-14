@@ -1,0 +1,2326 @@
+---
+title: "Programme summary report"
+subtitle: "Impact evaluation findings from (nearly) all projects from the Detect, Protect and Prevent  (DPP) programme"
+author: "Craig Parylo"
+date: today
+
+title-block-banner: '#151412'
+format:
+  html:
+    toc: true
+    toc-depth: 3
+    code-fold: true
+    embed-resources: true
+    fig-format: svg
+    fig-width: 10
+    fig-height: 3
+    fig-dpi: 600
+    default-image-extension: svg
+    lightbox: true
+    editor: visual
+brand: _brand.yml
+css: styles.css
+bibliography: references.bib
+---
+
+```{r setup}
+#| include: false
+
+# fix a path issue for me
+sys_info <- Sys.info()
+if (sys_info["user"] == "Craig.Parylo") {
+  .libPaths(new = "C:/Users/craig.parylo/AppData/Local/Programs/R/R-4.4.2/library")
+}
+
+# libraries
+library(zoo)
+library(patchwork)
+
+# udf
+source(here::here('scripts', 'dpp_report_chart_functions.R'))
+
+# data -------------------------------------------------------------------
+# project details
+# dpp_projects <- readRDS(file = here::here('data', 'project', 'ddp_projects.Rds'))
+
+# project details from grants spreadsheet
+df_grants <- readRDS(
+  file = here::here('data', 'general', 'df_grants.Rds')
+)
+
+# identify updated start dates for the case study projects
+df_case_studies_start <- 
+  readRDS(
+    file = here::here('data', 'project', 'ddp_projects.Rds')
+  ) |> 
+  dplyr::select(
+    project_code, project_id, started_month
+  ) |> 
+  # exclude projects with known issues
+  dplyr::filter(
+    !project_id %in% c('P1', 'P13', 'P14')
+  )
+
+# get a list of dpp projects
+dpp_projects <-
+  df_grants |> 
+  dplyr::filter(
+    # exclude national focussed projects
+    !calc_link %in% c('National'),
+    # problematic case study grants
+    !grant_id %in% c(
+      '2023-054', # P1
+      '2023-055', # P13
+      'pseudo_rachel@_33' # P14
+    )
+  ) |> 
+  # convert start date to a yearmon
+  dplyr::mutate(started_month = zoo::as.yearmon(calc_start)) |> 
+  # update the start month for the case study projects
+  dplyr::left_join(
+    y = df_case_studies_start |> 
+      dplyr::select(
+        grant_id = project_code,
+        updated_start_month = started_month
+      ) |> 
+      dplyr::distinct(),
+    by = dplyr::join_by(grant_id == grant_id)
+  ) |> 
+  dplyr::mutate(
+    started_month = dplyr::coalesce(
+      updated_start_month,
+      started_month
+    )
+  ) |> 
+  dplyr::filter(
+    # exclude projects without start date
+    !is.na(started_month),
+    # exclude projects starting before March 2022 (lowest time point)
+    started_month >= zoo::as.yearmon("Mar 2022")
+  )
+
+# project to geo lookup
+dpp_practices <- readRDS(file = here::here('data', 'project', 'project_practice_lu.Rds')) |> 
+  janitor::clean_names()
+
+# alternate practices - hospital and poster review
+dpp_practices_alt <- dplyr::bind_rows(
+  # p9 - emergency admissions
+  readRDS(
+    file = here::here('data', 'hospital_geo', 'p9_gp_practices.Rds')
+  ),
+  # p 16 - emergency admissions
+  readRDS(
+    file = here::here('data', 'hospital_geo', 'p16_gp_practices.Rds')
+  ),
+  # p12 - poster review
+  readRDS(
+    file = here::here('data', 'hospital_geo', 'p12_gp_practices.Rds')
+  ) |> 
+    # limit to AF-focussed projects
+    dplyr::filter(focus |> stringr::str_starts(pattern = 'AF')) |> 
+    # add in missing details
+    dplyr::mutate(
+      project_id = 'P12',
+      project_code = '2023-047'
+    ),
+  # other 'hospital' coded grants
+  readRDS(
+    file = here::here('data', 'hospital_geo', 'df_other_hospital_grants.Rds')
+  )
+) |> 
+  # remove unecessary fields
+  dplyr::select(-c('trust_code', 'trust_name', 'msoa', 'focus'))
+
+# matching variables
+df_matching <- readRDS(file = here::here('data', 'matching', 'df_matching_imputed.Rds'))
+
+# outcome variables
+df_cvd <- readRDS(
+  file = here::here('data', 'cvd_prevent', 'cvd_prevent.Rds')
+)
+
+# processing -------------------------------------------------------------
+# get the current projects
+df_project <- dpp_projects
+
+# remove practices assigned using the 'old' method for the 'alt' projects
+# and replace by these alternate practices
+dpp_practices2 <-
+  dpp_practices |> 
+  # ensure practice_code is complete
+  dplyr::mutate(
+    practice_code = dplyr::coalesce(practice_code, temp_practice_code)
+  ) |> 
+  # remove practices assigned using old method
+  dplyr::filter(!grant_id %in% dpp_practices_alt$project_code) |>
+  # add in the practices assigned using the new process
+  dplyr::bind_rows(
+    dpp_practices_alt |> 
+      dplyr::rename(
+        grant_id = project_code,
+        practice_code = prac_code,
+      ) |> 
+      dplyr::select(-practice_postcode)
+  ) |> 
+  # remove columns no longer needed
+  dplyr::select(
+    -dplyr::any_of(dplyr::starts_with('temp_')),
+    -score
+  )
+
+# get the practices for these projects
+df_practices <- 
+  dpp_practices2 |> 
+  dplyr::filter(grant_id %in% df_project$grant_id)
+
+# add in a flag for any practice subject to DPP funding
+df_matching <- 
+  df_matching |> 
+  dplyr::mutate(
+    flag_dpp_practice = prac_code %in% dpp_practices2$practice_code
+  )
+
+# flag which practices have data for all periods in the evaluation (Mar 2022 to Sep 2024)
+#df_cvd |> dplyr::count(time_period_id, year_month)
+
+# list all time period ids in cvd_prevent
+all_time_periods <- unique(df_cvd$time_period_id)
+
+# limit to those from time period 4 onwards (i.e. >= Mar 2022)
+study_time_periods <- all_time_periods[all_time_periods >= 4]
+
+# list practices with outcome data for all reporting periods
+# cvd_included_practices <-
+#   df_cvd |> 
+#   dplyr::filter(
+#     time_period_id >= 4, # March 2022
+#     indicator_id == 7 # prevalence of AF (main outcome)
+#   ) |> 
+#   dplyr::summarise(
+#     outcome_periods = sum(!is.na(value)), # count where value supplied
+#     .by = c(area_code, area_name)
+#   ) |> 
+#   dplyr::mutate(
+#     flag_time_periods_all = outcome_periods == length(study_time_periods)
+#   ) |> 
+#   dplyr::filter(flag_time_periods_all == TRUE) |> 
+#   dplyr::pull(area_code)
+
+# list practices which are excluded
+# cvd_excluded_practices <-
+#   df_practices |>
+#   dplyr::filter(!practice_code %in% cvd_included_practices) |> 
+#   dplyr::pull(practice_code)
+
+# summarise some useful information on the projects
+# proj_name <- df_project$project_title
+# proj_code <- df_project$project_code
+# prac_assignment <- df_practices$method |> 
+#   unique() |> 
+#   dplyr::coalesce('Manual')
+
+# add gp assignment method and nearest reporting time period
+df_project <-
+  df_project |> 
+  # add in gp assignment method
+  dplyr::left_join(
+    y = dpp_practices2 |> 
+      dplyr::select(grant_id, method) |> 
+      dplyr::distinct(),
+    by = dplyr::join_by(grant_id == grant_id)
+  ) |> 
+  # add in nearest CVDPREVENT reporting time period as intervention start
+  dplyr::left_join(
+    y = df_cvd |> 
+      dplyr::select(year_month, time_period_id) |> 
+      dplyr::distinct(),
+    by = dplyr::join_by(dplyr::closest(started_month <= year_month))
+  )
+
+
+# update project_vars
+# project_vars$project_code <- df_project$project_code |> 
+#   trimws()
+# project_vars$project_name <- df_project$project_title |> 
+#   trimws()
+# project_vars$project_start_ym <- df_project$started_month |> 
+#   as.character()
+# project_vars$project_start_tp <- df_project$started_time_period |> 
+#   as.integer()
+
+```
+
+# Project overview
+
+:::: panel-tabset
+## Projects
+
+```{r}
+# temporary df summarising projects
+temp_proj_summary <-
+  df_project |> 
+  dplyr::mutate(
+    started_month = started_month |> as.character()
+  ) |> 
+  # add in the practice assignment methods and practice count
+  dplyr::left_join(
+    y = df_practices |> 
+      dplyr::summarise(
+        practice_count = dplyr::n_distinct(practice_code) |> 
+          as.character(),
+        .by = c(grant_id, method)
+      ) |> 
+      dplyr::rename(practice_assignment = method),
+    by = dplyr::join_by(grant_id == grant_id)
+  ) |> 
+  dplyr::arrange(zoo::as.yearmon(started_month))
+  
+
+# high-level overview of the projects
+temp_proj_summary |> 
+  dplyr::select(
+    grant_id,
+    initiative_title,
+    dpp_category,
+    started_month,
+    practice_count
+  ) |> 
+  dplyr::mutate(
+    practice_count = practice_count |> as.numeric(),
+  ) |> 
+  gt::gt() |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+  ) |> 
+  gt::cols_label(
+    grant_id = 'ID',
+    initiative_title = 'Title',
+    dpp_category = 'Key theme',
+    started_month = 'Intervention started',
+    practice_count = 'Practices covered'
+  )
+```
+
+## Exclusions
+
+```{r}
+
+temp_proj_summary_excluded <-
+  df_grants |> 
+  # look at grants not in the project summary
+  dplyr::filter(
+    !grant_id %in% temp_proj_summary$grant_id
+  ) |> 
+  # determine why they were excluded
+  dplyr::mutate(
+    exclusion_reason = dplyr::case_when(
+      is.na(calc_start) ~ "No start date provided",
+      calc_start |> 
+        as.Date() |> 
+        zoo::as.yearmon() < zoo::as.yearmon("Mar 2022") ~ 
+          "Start before March 2022",
+      calc_link %in% c('National') | 
+        grant_id %in% c('2023-055', 'pseudo_rachel@_33') ~ 
+          "National geographic scope",
+      grant_id %in% c('2023-054') ~ 
+        "Start after last reporting period"
+    )
+  ) |> 
+  dplyr::select(
+    grant_id,
+    initiative_title,
+    dpp_category,
+    calc_link,
+    calc_start,
+    exclusion_reason
+  )
+
+temp_proj_summary_excluded |> 
+  dplyr::arrange(exclusion_reason) |> 
+  dplyr::select(-c(calc_start, calc_link)) |> 
+  gt::gt(row_group_as_column = TRUE) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  gt::cols_align('left') |> 
+  gt::cols_label(
+    grant_id = "ID (or pseudo key)",
+    initiative_title = "Title",
+    dpp_category = "DPP focus",
+    exclusion_reason = "Reason for exclusion"
+  )
+
+
+```
+
+::: callout-tip
+## Note
+
+This evaluation requires outcomes reported in each period from March 2022 to September 2024, which covers the pre-intervention period to the latest available outcomes. This comprises `r length(study_time_periods)` reporting periods.
+
+Possible reasons for a practice being excluded include:
+
+-   The practice did not have an outcome reported for metric [`CVDP002AF`](https://data.cvdprevent.nhs.uk/data-explorer?period=20&level=1&area=1&indicator=7&metadata=7#7) (patients with a diagnosis of AF who are treated with anticoagulants) for one ore more reporting period(s).
+
+-   The practice's reported value may have been suppressed to [disclosure control](https://data.cvdprevent.nhs.uk/data-explorer?period=20&level=1&area=1&indicator=7&metadata=7#7). Counts between 1 and 7 are considered too low for reporting by the CVDPREVENT audit.
+
+-   The practice chose not to participate in the CVDPREVENT audit.
+:::
+
+## Exclusion reasons
+
+```{r}
+temp_proj_summary_excluded |> 
+  dplyr::count(exclusion_reason) |> 
+  dplyr::arrange(dplyr::desc(n)) |> 
+  gt::gt()
+```
+::::
+
+# Matching {#sec-matching}
+
+## Matching variables
+
+The following factors were selected as variables for use when matching GP practices in interventions areas with GP practices in areas free from DPP funding initiatives.
+
+These factors were identified from the Clinical Knowledge Summary on [atrial fibrillation](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) produced by the National Institute for Health and Care Excellence (NICE).
+
+The list of factors was shortlisted based on:
+
+-   factors likely to be independent of AF incidence,
+
+-   data is available at GP practice level,
+
+-   data is available for the pre-intervention period (around 2022-23 financial year).
+
+This list was ratified by the DPP Steering Group in December 2024.
+
+::: panel-tabset
+### Socio-economic factors
+
+#### Registered practice population per FTE clinician
+
+The number of patients per clinical WTE can be a marker for [a range of factors](https://www.ons.gov.uk/peoplepopulationandcommunity/healthandsocialcare/healthcaresystem/articles/trendsinpatienttostaffnumbersatgppracticesinengland/2022) such as funding available to the practice, presence of other clinical staff, clinical needs of the local population and changes in the local population. Data comes from [GP workforce data](https://digital.nhs.uk/data-and-information/publications/statistical/general-and-personal-medical-services/30-april-2023) published by NHS Digital for April 2023.
+
+At the December Steering Group it was agreed to use the ratio of patients to all clinical staff at each practice with the rationale that care of AF is often delegated to non-medical staff.
+
+This variable is defined as the number of registered adult patients (aged 18+) divided by the total working time equivalent (WTE) for clinical staff at the practice, defined as the total WTE for GPs (including trainees), Nursing staff and Direct Patient Care staff (DPC).
+
+#### Weighted deprivation score per practice
+
+Greater socio-economic deprivation is associated with poorer outcomes across a [range of health issues](https://www.thelancet.com/journals/lanpub/article/PIIS2468-2667(18)30200-7/fulltext), including [Atrial Fibrillation](https://pubmed.ncbi.nlm.nih.gov/36465437/). Data comes from 2019 indices of multiple deprivation (IMD) population weighted score for patients registered at each practice by [Fingertips](https://fingertips.phe.org.uk/search/deprivation#page/6/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/93553/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1/page-options/car-do-0).
+
+#### Rurality of the practice
+
+[Distance can be a barrier](https://ij-healthgeographics.biomedcentral.com/articles/10.1186/1476-072X-3-21) to accessing healthcare. Rurality can be a proxy measure for ease of healthcare access and has [implications in the care of people with atrial fibrillation](https://www.nature.com/articles/s41569-021-00561-0). Data is based on the 10-step [rural-urban classification](https://www.ons.gov.uk/methodology/geography/geographicalproducts/ruralurbanclassifications) of practices based on the practice postcode.
+
+### Clinical factors
+
+#### Increasing age
+
+The risk of developing AF doubles with each progressive decade and exceeds 20% by age 80 years. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population who are aged 65-years and above.
+
+The 65-year threshold, though somewhat arbitrary, was determined in consultation with the DPP Steering Group.
+
+#### Obesity prevalence
+
+[Obesity is an independent risk factor](https://pmc.ncbi.nlm.nih.gov/articles/PMC8576485/) for the development of AF. Data comes from the 2022/23 prevalence of obesity (QoF) - defined as the percentage of adult patients with a BMI greater than or equal to 30 - via [Fingertips](https://fingertips.phe.org.uk/search/obesity#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/92588/age/168/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+#### Diabetes prevalence
+
+[Diabetes is an independent risk factor](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) for AF, especially in young people. Prevalence is at least two-fold higher in people with diabetes compared with people without diabetes. Data is defined QoF measure of prevalence of diabetes mellitus in GP registered population aged 17 years or older for 2022/23 - data taken from [Fingertips](https://fingertips.phe.org.uk/search/diabetes#page/3/gid/1/pat/204/par/U00000/ati/7/are/D82060/iid/241/age/187/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1).
+
+#### Hypertension prevalence
+
+People with hypertension have a [1.7-fold higher risk of developing AF](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/causes-risk-factors/) compared with people with blood pressure in the normal range. Source is QOF data taken from [Fingertips](https://fingertips.phe.org.uk/search/hypertension#page/4/gid/1/pat/159/par/K02000001/ati/15/are/E92000001/iid/219/age/1/sex/4/cat/-1/ctp/-1/yrr/1/cid/4/tbm/1) and defined as the all-age prevalence in 2022-23.
+
+#### Gender proportion
+
+[Age-adjusted incidence, prevalence and lifetime risk of AF is higher in men](https://cks.nice.org.uk/topics/atrial-fibrillation/background-information/prevalence/) compared with women. Data comes from [GP registered population data](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice) published by NHS Digital and represented as the proportion of the adult GP registered population recorded as being male.
+:::
+
+## Pre-matching assessment
+
+```{r}
+# limit matching records to those of the project and the donor pool
+df_matching_project <-
+  df_matching |> 
+  # flag intervention practices
+  dplyr::mutate(
+    flag_intervention = dplyr::if_else(
+      condition = prac_code %in% df_practices$practice_code,
+      true = 1,
+      false = 0
+    )
+  ) |> 
+  # exclude other dpp practices but keep the reporting project's practices
+  dplyr::filter(
+    flag_intervention == 1 | flag_dpp_practice == FALSE
+  )
+
+# summary stats
+n_matching_intervention <- 
+  df_matching_project |> 
+  dplyr::filter(flag_intervention == 1) |> 
+  dplyr::summarise(rows = dplyr::n()) |> 
+  dplyr::pull(rows)
+n_matching_donor <- 
+  df_matching_project |> 
+  dplyr::filter(flag_intervention == 0) |> 
+  dplyr::summarise(rows = dplyr::n()) |> 
+  dplyr::pull(rows)
+```
+
+There are `r prettyNum(n_matching_intervention, big.mark = ",")` practices in the intervention group and `r prettyNum(n_matching_donor, big.mark = ",")` practices in the pool of non-intervention practices to use as potential matches.
+
+### Completing missing data
+
+The percentage of missing values across the eight matching variables varied between 0% and 2.8%. In total, 215 of 6,419 (3.3%) records were incomplete.
+
+The statistical package [{MatchIt}](https://kosukeimai.github.io/MatchIt/index.html) removes records with any gaps in the matching variables, which would have resulted in the removal of 215 practices from the dataset and added a form of selection bias to this analysis. Imputing the missing data maximises the number of practices in the analysis.
+
+Many GP practices likely had no deprivation score because they were established after April 2019, when the population weighted deprivation profiles for practices were last published. Some practices have no published QoF scores for obesity, hypertension and diabetes possibly because these practices may be newer than the snapshot taken in April 2023, or did not have any patients with these conditions to report, or that participation in QoF is voluntary with around [97% of practices](https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data/2023-24/frequently-asked-questions) participating, including these practices.
+
+We used multiple imputation to create and analyse 40 multiply imputed datasets. Methodologists currently regard multiple imputation as a state-of-the-art technique because it improves accuracy and statistical power relative to other missing data techniques. Incomplete variables were imputed under fully conditional specification, using the default settings of the [{mice}](https://github.com/amices/mice) 3.0 package (Van Buuren and Groothuis-Oudshoorn). [@buuren2011]
+
+The parameters of substantive interest were estimated in each imputed dataset separately, and combined using Rubin’s rules.
+
+::: callout-note
+#### Data imputation
+
+For more information on the process of data imputation, please see the report 'Imputing Matching Variables' for the DPP project.
+:::
+
+### Pre-matching covariate balance
+
+Comparing the intervention group with the whole of the control group (prior to matching) indicates that this set of variables is appropriate to use in the matching process. This is seen in the below table which shows most variables have a standardised mean difference above 0.1 (highlighted) and some of the variance ratios are are not equal to 1 (colour-coded).
+
+```{r}
+# set the formula for the matching process
+dpp_formula <- flag_intervention ~ adults_male_prop + adults_65_plus_prop + patients_per_clinician + deprivation_score + diabetes_prevalence + obesity_prevalence + rural_code
+
+# check the balance prior to matching
+set.seed(123)
+match_pre <- MatchIt::matchit(
+  formula = dpp_formula,
+  data = df_matching_project,
+  method = NULL,
+  distance = 'glm'
+) |> summary()
+
+t <-
+  match_pre$sum.all |> 
+  tibble::as_tibble(rownames = 'Matching Variable') |> 
+  dplyr::select(-c(`Std. Pair Dist.`)) |> 
+  gt::gt() |> 
+  gt::fmt_number(
+    columns = gt::everything(),
+    decimals = 4
+  ) |> 
+  gt::data_color(
+    columns = c(`Std. Mean Diff.`),
+    method = 'numeric',
+    palette = '#7C2855',
+    rows = abs(`Std. Mean Diff.`) >= 0.1 
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `Std. Mean Diff.`),
+    footnote = gt::md('*Standardised mean differences* (SMD) is the difference in means of each covariate and standardised so that it is on the same scale for all covariates. SMD scores above 0.1 (highlighted) indicate prognostically important covariates.')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `Var. Ratio`),
+    footnote = gt::md('*Variance ratios* is the ratio of the covariate in one group to that in the other. Variance ratios close to 1 indicate good balance because they imply the variances of the samples are similar.')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = c(`eCDF Mean`, `eCDF Max`)),
+    footnote = gt::md('*Emperical CDF statistics* allow assessment of imbalance across the entire covariate distribution. The maximum eCDF difference, also known as the Kolmogorov-Smirnov statistic, is sometimes recommended as useful supplement to SMDs for assessing balance.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  )
+
+# add colour-coding if more than 1 intervention practice
+# NB, this was causing issues when the project involved only one practice
+# because the variance is 0
+if (n_matching_intervention > 1) {
+  t <-
+    t |> 
+    gt::data_color(
+    columns = c(`Var. Ratio`),
+    method = 'numeric',
+    palette = 'Greens'
+  )
+}
+
+t
+
+```
+
+## Post-matching covariate balance
+
+The matching process calculates a propensity score, a number between 0 and 1, using the matching variables to determine how 'likely' a given GP practice is to be in the intervention group. It then uses a [nearest neighbour](https://en.wikipedia.org/wiki/K-nearest_neighbors_algorithm) algorithm to select the most similar control GP practice for each intervention GP practice (see @fig-psm).
+
+Matches were made 'with replacement', so that it is possible for a control GP practice to be matched with multiple intervention practices.
+
+![Illustration of Propensity Score Matching (PSM)](images/Untitled.png){#fig-psm}
+
+Matching was conducted using the [{MatchIt}](https://github.com/kosukeimai/MatchIt/) package using a generalised linear model method of distance matching. [@ho2011]
+
+```{r}
+# conduct the matching process
+set.seed(123)
+match_post <- MatchIt::matchit(
+  formula = dpp_formula,
+  data = df_matching_project,
+  method = 'nearest',
+  replace = TRUE,
+  ratio = 1,
+  distance = 'glm'
+)
+```
+
+> Although matching on the propensity score is often effective at eliminating differences between the treatment groups to achieve covariate balance, its performance in this regard must be assessed.
+
+[Assessing the quality of matches](https://kosukeimai.github.io/MatchIt/articles/MatchIt.html#assessing-the-quality-of-matches), MatchIt
+
+The following analyses demonstrate the covariate balance following the matching process as well as summaries of the number (if any) treatment practices were discarded by the matching process.
+
+:::: panel-tabset
+#### Love plot
+
+```{r}
+#| fig_cap: 'Covariate balance (love plot) post matching'
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 5
+#| message: false
+var_names <- c(
+  obesity_prevalence = 'Obesity prevalence',
+  diabetes_prevalence = 'Diabetes prevalence',
+  deprivation_score = 'Deprivation score',
+  patients_per_clinician = 'Patients per clinician',
+  adults_male_prop = 'Proportion of males (adults)',
+  adults_65_plus_prop = 'Proportion of people aged 65 and over',
+  rural_code_A1 = 'Rural code: A1',
+  rural_code_B1 = 'Rural code: B1',
+  rural_code_C1 = 'Rural code: C1',
+  rural_code_C2 = 'Rural code: C2',
+  rural_code_D1 = 'Rural code: D1',
+  rural_code_D2 = 'Rural code: D2',
+  rural_code_E1 = 'Rural code: E1',
+  rural_code_E2 = 'Rural code: E2'
+)
+
+# create the love plot
+p <- cobalt::love.plot(
+  x = match_post,
+  thresholds = c(0.1),
+  abs = T,
+  var.order = 'unadjusted',
+  stats = c('mean.diffs'),
+  stars = 'raw', # identify which covariates are not standardised
+  var.names = var_names
+) +
+  ggplot2::scale_color_manual(values = c('Unadjusted' = '#DA291C', 'Adjusted' = '#0072CE')) +
+  ggplot2::labs(
+    caption = '* = Variable is not standardised as it is not continuous'
+  )
+p # display the plot
+
+# get the data for the love plot
+p_data <- p$data 
+
+# summarise the top 3 imbalanced covariates
+txt_match_unad_top3 <-
+  p_data |> 
+  dplyr::filter(Sample == 'Unadjusted', var != 'distance') |> 
+  dplyr::slice_max(order_by = stat, n = 3) |> 
+  dplyr::summarise(
+    text = paste(var, collapse = ', ')
+  ) |> 
+  dplyr::pull(text)
+  
+# summarise the greatest changes
+df_match_change <-
+  p_data |> 
+  dplyr::filter(var != 'distance') |> 
+  dplyr::arrange(var, Sample) |> 
+  dplyr::mutate(
+    change = dplyr::lag(stat) - stat,
+    .by = var
+  ) |> 
+  dplyr::filter(!is.na(change)) |> 
+  dplyr::arrange(dplyr::desc(change))
+
+# which 3 covariates showed the greatest improvement
+txt_match_change_top3 <-
+  df_match_change |> 
+  dplyr::slice_max(order_by = change, n = 3) |> 
+  dplyr::summarise(
+    text = paste(var, collapse = ', ')
+  ) |> 
+  dplyr::pull(text)
+
+# covariate count
+n_match_covariate <-
+  df_match_change |> 
+  dplyr::summarise(count = dplyr::n_distinct(var, na.rm = TRUE)) |> 
+  dplyr::pull(count)
+
+# how many covariates got better
+n_match_change_better <-
+  df_match_change |> 
+  dplyr::mutate(flag_better = change > 0) |> 
+  dplyr::summarise(count = sum(flag_better)) |> 
+  dplyr::pull(count)
+
+# which covariates got better
+txt_match_change_better <-
+  df_match_change |> 
+  dplyr::filter(change > 0) |> 
+  dplyr::arrange((change)) |> 
+  dplyr::summarise(
+    text = paste(var, collapse = ', ')
+  ) |> 
+  dplyr::pull(text)
+
+# how many covariates got worse
+n_match_change_worst <-
+  df_match_change |> 
+  dplyr::mutate(flag_worse = change < 0) |> 
+  dplyr::summarise(count = sum(flag_worse)) |> 
+  dplyr::pull(count)
+
+# which covariates got worse
+txt_match_change_worst <-
+  df_match_change |> 
+  dplyr::filter(change < 0) |> 
+  dplyr::arrange(dplyr::desc(change)) |> 
+  dplyr::summarise(
+    text = paste(var, collapse = ', ')
+  ) |> 
+  dplyr::pull(text)
+
+# how many covariates within threshold
+n_match_within_threshold <-
+  df_match_change |> 
+  dplyr::filter(dplyr::between(stat, -0.1, 0.1)) |> 
+  dplyr::summarise(rows = dplyr::n()) |> 
+  dplyr::pull(rows)
+
+```
+
+This plot shows the covariate balance before and after matching (adjusting). The vertical dotted line indicates the 0.1 threshold below which indicates good balance between the treated and matched groups.
+
+The pre-matched series (unadjusted) demonstrates clear imbalance, particularly for `r txt_match_unad_top3`.
+
+The post-matched series (adjusted) shows much greater balance between all covariates. `r n_match_change_better` of `r n_match_covariate` covariates showed better balance following matching, with greatest improvements seen in `r txt_match_change_top3`. As a result `r n_match_within_threshold` of `r n_match_covariate` covariates are now within the 0.1 recommended threshold.
+
+`r n_match_change_worst` of `r n_match_covariate` covariates showed greater imbalance following matching, including: `r txt_match_change_worst`.
+
+#### Summary
+
+##### Count of matches
+
+```{r}
+# summarise the post matching data
+# NB `un = FALSE` to suppress display of balance before matched for
+# brevity - saw this in the pre-match balance above.
+match_post_sum <- summary(match_post, un = FALSE)
+
+# how many were matched / discarded?
+match_post_sum$nn |> 
+  tibble::as_tibble(rownames = 'Group') |> 
+  dplyr::filter(!grepl('(ESS)', Group)) |> 
+  gt::gt() |> 
+  gt::tab_style(
+    style = list(gt::cell_fill(color = '#005EB8'), gt::cell_text(color = 'white')),
+    locations = gt::cells_body(columns = 'Treated', rows = 3)
+  )
+
+# count how many treated groups are discarded
+n_match_treated_discarded <- 
+  match_post_sum$nn['Unmatched', 'Treated']
+```
+
+There are `r n_match_treated_discarded` unmatched treated practices.
+
+##### Balance of covariates in matched pairs
+
+```{r}
+# what does the covariate data look like now?
+t <-
+  match_post_sum$sum.matched |> 
+  tibble::as_tibble(rownames = 'Matching Variable') |> 
+  dplyr::select(-c(`eCDF Mean`, `eCDF Max`)) |> 
+  gt::gt() |> 
+  gt::fmt_number(
+    columns = gt::everything(),
+    decimals = 4
+  ) |> 
+  gt::data_color(
+    columns = c(`Std. Mean Diff.`),
+    method = 'numeric',
+    palette = '#7C2855',
+    rows = abs(`Std. Mean Diff.`) >= 0.1 
+  ) |> 
+  # gt::data_color(
+  #   columns = c(`Var. Ratio`),
+  #   method = 'numeric',
+  #   palette = 'Greens'
+  # ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `Std. Mean Diff.`),
+    footnote = gt::md('*Standardised mean differences* (SMD) is the difference in means of each covariate and standardised so that it is on the same scale for all covariates. SMD scores above 0.1 (hightlighted) indicate prognostically important covariates.')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `Var. Ratio`),
+    footnote = gt::md('*Variance ratios* is the ratio of the covariate in one group to that in the other. Variance ratios close to 1 indicate good balance because they imply the variances of the samples are similar.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  )
+
+# add colour-coding if more than 1 intervention practice
+# NB, this was causing issues when the project involved only one practice
+# because the variance is 0
+if (n_matching_intervention > 1) {
+  t <-
+    t |> 
+    gt::data_color(
+    columns = c(`Var. Ratio`),
+    method = 'numeric',
+    palette = 'Greens'
+  )
+}
+
+t
+
+```
+
+#### Balance measures
+
+This table presents an alternative view of balance measures, focussing on the standardised differences in means and whether they are within threshold as well as the variance ratio.
+
+```{r}
+
+# decide on the statistics to report based on the number of intervention practices
+if (n_matching_intervention > 1) {
+  stats_report <- c('m', 'v')
+} else {
+  stats_report <- c('m')
+}
+
+# use cobalt's bal.tab to see the
+match_post_baltab <- cobalt::bal.tab(
+  x = match_post,
+  thresholds = c(m = 0.1),
+  stats = stats_report,
+  binary = 'std'
+)
+t <-
+  match_post_baltab$Balance |> 
+  tibble::as_tibble(rownames = 'Covariate') |> 
+  dplyr::select(-dplyr::any_of(c('Diff.Un', 'V.Ratio.Un'))) |> 
+  gt::gt() |> 
+  gt::fmt_number(
+    columns = gt::everything(),
+    decimals = 4
+  ) |> 
+  gt::cols_align(columns = c('M.Threshold'), align = 'right') |> 
+  gt::data_color(
+    columns = c(`Diff.Adj`),
+    method = 'numeric',
+    palette = '#7C2855',
+    rows = abs(`Diff.Adj`) >= 0.1 
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `Diff.Adj`),
+    footnote = gt::md('The (standardised) difference in means between the two groups after adjusting.')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `M.Threshold`),
+    footnote = gt::md('Whether or not the calculated mean difference after adjusting exceeds or is within the threshold.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  )
+
+if (n_matching_intervention > 1) {
+  t <-
+    t |> 
+    gt::data_color(
+    columns = c(`V.Ratio.Adj`),
+    method = 'numeric',
+    palette = 'Greens'
+    ) |> 
+    gt::tab_footnote(
+    locations = gt::cells_column_labels(columns = `V.Ratio.Adj`),
+    footnote = gt::md('The ratio of the covariate in one group to that of the other - values close to 1 indicate good balance because they imply the variances are similar.')
+  )
+}
+t
+```
+
+#### Balance plots
+
+These plots show the distributional balance between intervention and control groups for each covariate. The left-hand plot shows distributions for the un-matched groups whilst the right-hand plot shows the same distributions for the matched groups.
+
+If matching has been successful the post-matching plots should have a closer distributional balances between intervention and control groups.
+
+```{r}
+#| fig_cap: 'Individual covariate balance plots'
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 4
+# set up a list of variables
+vars <- c(
+  'adults_male_prop',
+  'adults_65_plus_prop',
+  'patients_per_clinician',
+  'deprivation_score',
+  'diabetes_prevalence',
+  'obesity_prevalence',
+  'rural_code',
+  'distance'
+)
+
+# create balance plots for each variable and add to a list
+plots <- 
+  purrr::map(
+    .x = vars,
+    .f = function(.x) {
+      cobalt::bal.plot(
+        x = match_post, which = 'both', var.name = .x
+      )
+    }
+  )
+
+# show the plots
+plots
+```
+
+#### Matches
+
+::: fullwidth
+Here are the resulting matches
+
+```{r}
+# collect the matches
+df_matches <-
+  MatchIt::get_matches(match_post)
+
+# show as a table
+df_matches |> 
+  dplyr::select(
+    -c(id, weights, adults_headcount, flag_dpp_practice)
+  ) |> 
+  dplyr::group_by(subclass) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    prac_code = 'Practice code',
+    practice_name = 'Practice',
+    practice_postcode = 'Postcode',
+    adults_male_prop = 'Proportion of males',
+    adults_65_plus_prop = 'Proportion aged 65+',
+    deprivation_score = 'Deprivation score',
+    diabetes_prevalence = 'Diabetes prevalence',
+    obesity_prevalence = 'Obesity prevalence',
+    hypertension_prevalence = 'Hypertension prevalence',
+    rural_code = 'Rural code',
+    flag_intervention = 'Intervention group',
+    distance = 'Propensity score',
+    patients_per_clinician = 'Patients per clinician'
+  ) |> 
+  gt::fmt_number(
+    columns = gt::everything(),
+    decimals = 4
+  ) |> 
+  gt::fmt_integer(
+    columns = c('flag_intervention')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  )
+```
+:::
+::::
+
+# Impact analysis
+
+```{r}
+
+# get a lookup from practice to start date
+temp_df_practice_start_id <- df_practices |> 
+  dplyr::select(grant_id, practice_code) |> 
+  dplyr::distinct() |> 
+  dplyr::left_join(
+    y = df_project |> 
+      dplyr::select(grant_id, started_time_period = time_period_id) |> 
+      dplyr::distinct(grant_id, .keep_all = TRUE),
+    by = dplyr::join_by(grant_id == grant_id)
+  ) |> 
+  # if a practice is subject to more than one intervention then take the
+  # earliest start date
+  dplyr::summarise(
+    started_time_period = min(started_time_period),
+    .by = practice_code
+  )
+
+# get outcome data for our matched groups
+df_did_data <-
+  df_matches |> 
+  dplyr::select(
+    dplyr::any_of(
+      c(
+        'id', 'prac_code', 'practice_name', 'practice_postcode', 
+        'subclass', 'flag_intervention'
+      )
+    )
+  ) |> 
+  # add in outcome data
+  dplyr::left_join(
+    y = df_cvd |> 
+      dplyr::filter(time_period_id >= 4) |> 
+      dplyr::select(
+        dplyr::any_of(
+          c(
+            'area_code', 
+            'time_period_id', 'year_month', 
+            'indicator_id', 'indicator_code', 'indiator_name', 
+            'indicator_short_name', 
+            'numerator', 'denominator', 'value', 'value_note'
+          )
+        )
+      ),
+    by = dplyr::join_by(prac_code == area_code),
+    # need many-to-many relationship as we did matching WITH replacement
+    relationship = 'many-to-many'
+  ) |> 
+  # add in project start date
+  dplyr::left_join(
+    y = temp_df_practice_start_id |> 
+      dplyr::select(practice_code, started_time_period),
+    by = dplyr::join_by(prac_code == practice_code)
+  ) |> 
+  # add in fields required for {did}
+  dplyr::mutate(
+    
+    # cast practice id (from matching process) to number
+    id = as.numeric(id),
+    
+    # # define the treated period for intervention practices
+    treated_time_period_id = dplyr::if_else(
+      condition = flag_intervention == 1,
+      true = started_time_period,
+      false = 0
+    )
+
+  )
+```
+
+## CVDP001AF - Prevalence (custom)
+
+This metric looks at the prevalence of GP recorded atrial fibrillation for people who are high risk (CHADS2 or CHA2DS2-VASc score of 2 or more), and is a customised version of CVDPREVENT's metric CVDP001AF.
+
+The source of this data is a combination of NHS Digital publications and the CVDPREVENT audit website. This is because the the CVDPREVENT audit do not report metric CVDP001AF at GP Practice level. To provide data for this impact analysis this metric a customised version has been produced.
+
+The numerator (number of patients with AF and at high risk) comes from the CVDPREVENT audit (the denominator for metric CVDP007AF) and the denominator (number of patients registered at a practice in a given month) comes from the NHS Digital publications on [patients registered at a GP practice](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice).
+
+The key difference between this custom metric and that produced by CVDPREVENT is the inclusion of the high-risk element in this custom metric. The metric reported by CVDPREVENT is the prevalence of overall AF, whereas this metric is the prevalence of AF which is high risk.
+
+::: panel-tabset
+### Time series
+
+A time series view of metric performance, with a plot each showing the `value` (performance against the metric), alongside the `numerator` and the `denominator`, used in the calculation of the `value`.
+
+```{r}
+# summarise data for the first metric, facetting on value, numerator and denominator 
+df_did_data_transformed <- 
+  df_did_data |> 
+  # limit to a single metric
+  dplyr::filter(indicator_id == 1) |>
+  dplyr::mutate(
+    flag_intervention_f = dplyr::case_match(
+      flag_intervention,
+      1 ~ 'Intervention',
+      0 ~ 'Control'
+    ) |> 
+      forcats::fct(levels = c('Intervention', 'Control')) |> 
+      forcats::fct_rev()
+  ) |> 
+  # summarise by group and time
+  dplyr::summarise(
+    dplyr::across(
+      dplyr::any_of(c('value', 'numerator', 'denominator')),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE), 
+        upper = ~ mean(.x, na.rm = TRUE) + sd(.x, na.rm = TRUE),
+        lower = ~ mean(.x, na.rm = TRUE) - sd(.x, na.rm = TRUE)
+      )
+    ),
+    .by = c(indicator_short_name, time_period_id, year_month, 
+            flag_intervention_f)
+  ) |> 
+  # pivot longer to make value, num & denom their own series
+  tidyr::pivot_longer(
+    cols = dplyr::any_of(
+      dplyr::starts_with(c('value_', 'numerator_', 'denominator_'))
+    ),
+    names_to = c('measurement', 'measurement_stat'),
+    names_pattern = "(.*)_(.*)",
+    values_to = 'value'
+  ) |> 
+  # pivot wider to put stats on the same row as their measurement
+  tidyr::pivot_wider(
+    names_from = dplyr::any_of(c('measurement_stat')),
+    values_from = value
+  ) |> 
+  # convert measurements to a factor to ensure consistent ordering
+  dplyr::mutate(
+    measurement = measurement |> 
+      forcats::fct(levels = c('value', 'numerator', 'denominator'))
+  ) |> 
+  # arrange the data to plot interventions above controls
+  dplyr::arrange(flag_intervention_f)
+```
+
+```{r}
+#| fig-cap: 'CVDP001AF metric details by reporting period'
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 10
+
+# plot the time series
+
+p <- plot_cvd_metric_timeseries_overall_v2(
+  df = df_did_data_transformed,
+  df_project = df_project,
+  str_metric = 'CVDP001AF'
+)
+p
+```
+
+The CVDPREVENT reporting periods are shown along the x-axis. These have typically followed a quarterly reporting frequency though there is a gap noticeable between June and December 2023 where no metrics at GP practice level were published. The time frame runs from March 2022 to September 2024 (the latest available data at the time of writing).
+
+There are two groups in each plot:
+
+-   shown in blue is the `Intervention` group comprising practices in whose population the DPP activity was focussed, and
+
+-   shown in grey is the `Control` group comprising practices unaffected by DPP funding and which were matched with practices in the intervention group (see @sec-matching).
+
+The focus of each plot is a point-range where the point represents the average (mean) value for each group in the time period and the range represents one standard deviation above and below.
+
+Note, the intervention and control groups report at the same time in the CVDPREVENT audit data, but have been offset in this plot to avoid overlap so that the point-ranges can be clearly seen.
+
+The dotted line represents the start of activities as part of the DPP funding. This line divides activity into a pre-intervention and a post-intervention period. NB, some short-listed projects had not completed their DPP activity by September 2024 so their impact is only partially represented in these metrics.
+
+### Definitions
+
+#### Topic
+
+Prevalence of GP recorded atrial fibrillation (AF) and with a CHADS2 or CHA2DS2-VASc score of 2 or more.
+
+#### Denominator
+
+Total number of patients aged 18 and over registered with a GP practice.
+
+#### Numerator
+
+Of the denominator who have a GP recorded AF and no record of resolution, at a high risk of stroke (CHADS2 or CHA2DS2-VASc score is greater than or equal to 2).
+
+#### Value
+
+Proportion (Numerator / Denominator) as a percent.
+
+#### Notes
+
+Suppressed sub-national counts between 1 and 7.
+
+Rounding to the nearest five for Numerator and Denominator.
+
+### DiD About
+
+To evaluate the effect of an intervention we need to estimate the average effect on practices where the intervention was administered, rather than the effects on the whole population. The Average Treatment effect in the Treated (ATT) is the measure we look at in these causal analyses, representing the average change in outcome for those who received the intervention.
+
+The [{did}](https://bcallaway11.github.io/did/) package was used to conduct the difference-in-differences in this analysis. The reasons for this include:
+
+-   the ability to examine more than two time periods. This means we can explore more than the binary pre- and post- intervention periods available in the 'classic' DiD analysis, and look at the range of outcomes over different time available from the CVDPREVENT audit,
+
+-   The dates when DPP activity began varies project-by-project, which represents a problem under the 'classic' DiD analysis. However, the {did} package can handle multiple start periods making consolidation of the findings from multiple projects possible.
+
+Estimates of treatment effect by {did} do not suffer any drawback associated with two-way fixed effects regressions or event study regressions when there are multiple periods and / or variation in treatment timing. [@callaway2021]
+
+The main outcomes from this analysis are *group-time average treatment effects*. These are the average treatment effect for a particular group (defined by when the group's intervention began) in a particular time period.
+
+### Time periods
+
+The CVDPREVENT audit typically publishes data monthly along with a `Time Period ID` that uniquely identifies each reporting period.
+
+The month name was used in the time-series analyses as the most intuitive way of displaying the dimension of time.
+
+For the Difference-in-Differences analysis we have used the `Time Period ID` to represent the dimension of time to facilitate statistical analysis. This is because the {did} [@callaway2021] statistical package requires a whole number (integer) to represent the time dimension.
+
+Below is a lookup table between report month and time period id to make cross-referencing findings between these two analyses easier.
+
+```{r}
+#| fig-cap: Lookup between CVDPREVENT report month and time period ID
+
+df_did_data_transformed |> 
+  dplyr::select(year_month, time_period_id) |> 
+  dplyr::distinct() |> 
+  dplyr::arrange(year_month) |> 
+  gt::gt() |> 
+  gt::tab_options(quarto.disable_processing = TRUE) |> 
+  gt::cols_label(
+    year_month = "Month",
+    time_period_id = "Time Period ID"
+  )
+```
+
+Projects began their interventions at different times with some starting as early as July 2022 and others much later in August 2024. This poses challenges in evaluating impact because there is no single implementation date after which we can assume the outcomes are influenced by the activities.
+
+To tackle this, projects are grouped together on the reporting month they started their interventions and are assessed separately.
+
+To help decode some of the DiD analyses here is a table collating projects by the earliest reporting month their results could be assumed to influence.
+
+```{r}
+#| fig-cap: CVDPREVENT report month and time period ID along with a list of projects starting DPP activities that period
+
+df_temp <-
+  df_did_data_transformed |> 
+  dplyr::select(year_month, time_period_id) |>
+  dplyr::mutate(year_month_period = glue::glue("{year_month} ID:{time_period_id}")) |> 
+  dplyr::distinct() |> 
+  dplyr::arrange(year_month) |> 
+  dplyr::left_join(
+    y = temp_proj_summary |> 
+      dplyr::select(
+        time_period_id, 
+        grant_id, 
+        initiative_title,
+        dpp_category,
+        practice_assignment,
+        practice_count
+      ),
+    by = dplyr::join_by(time_period_id == time_period_id)
+  ) |> 
+  dplyr::filter(!is.na(grant_id))
+
+df_temp |> 
+  dplyr::group_by(year_month_period) |> 
+  gt::gt(
+    #rowname_col = "test",
+    row_group_as_column = TRUE
+  ) |> 
+  gt::cols_hide(c(year_month, time_period_id)) |> 
+  gt::cols_label(
+    grant_id = 'Project code',
+    initiative_title = 'Title',
+    dpp_category = 'DPP category',
+    practice_assignment = "GP assignment method",
+    practice_count = 'Practices covered'
+  ) |> 
+  gt::tab_options(quarto.disable_processing = TRUE)
+```
+
+NB, some projects have overlapping geographical areas, meaning the GP practices involved are subject to more than one DPP initiative.
+
+Rather than double-counting practices where they are potentially impacted by more than one project, which would give greater weight to some GP practices and less weight to others, we have chosen to count practices once each.
+
+This means where a GP practice is part of more than one DPP project then the intervention date, which is the date which can consider DPP activities started, is taken to be the earliest date for the relevant projects.
+
+The result is that some of the start dates in the above table are not shown separately in the following analyses.
+
+```{r}
+ra <- list()
+
+# find the month with the most projects
+ra$month_most_projects <-
+  df_temp |> 
+  dplyr::summarise(
+    project_count = dplyr::n_distinct(grant_id),
+    .by = year_month
+  ) |> 
+  dplyr::slice_max(order_by = project_count) |> 
+  dplyr::pull(year_month)
+
+# how many projects in this month
+ra$month_most_projects_count <-
+  df_temp |> 
+  dplyr::summarise(
+    project_count = dplyr::n_distinct(grant_id),
+    .by = year_month
+  ) |> 
+  dplyr::slice_max(order_by = project_count) |> 
+  dplyr::pull(project_count)
+
+# what was the time period id for this month
+ra$month_most_projects_timeid <-
+  df_temp |> 
+  dplyr::summarise(
+    project_count = dplyr::n_distinct(grant_id),
+    .by = c(year_month, time_period_id)
+  ) |> 
+  dplyr::slice_max(order_by = project_count) |> 
+  dplyr::pull(time_period_id)
+
+# how many practices in this month
+ra$month_most_practices <-
+  df_temp |> 
+  dplyr::summarise(
+    project_count = dplyr::n_distinct(grant_id),
+    practices_sum = sum(as.numeric(practice_count), na.rm = TRUE),
+    .by = year_month
+  ) |> 
+  dplyr::slice_max(order_by = project_count) |> 
+  dplyr::pull(practices_sum)
+```
+
+The majority of projects (n=`r ra$month_most_projects_count`) began their DPP activities in time for the `r ra$month_most_projects` reports (time period = `r ra$month_most_projects_timeid`), representing `r ra$month_most_practices` GP practices.
+
+### DiD
+
+#### Difference-in-difference analysis
+
+```{r}
+# perform the difference-in-difference analysis
+# to get a group-time ATT
+set.seed(123)
+did <- 
+  df_did_data |> 
+  dplyr::filter(indicator_id == 1) |> 
+  did::att_gt(
+  yname = 'value',
+  tname = 'time_period_id',
+  idname = 'id',
+  gname = 'treated_time_period_id',
+  xformla = NULL, # no covariates as these are controlled for
+  allow_unbalanced_panel = TRUE, # cover missing outcomes
+  control_group = 'notyettreated',
+  bstrap = TRUE,
+  data = _ # inherit the data from the above pipe
+)
+```
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 20
+#| fig_cap: Group-Time difference-in-differences for CVDP001AF
+
+# display the results as chart
+did::ggdid(did) +
+  ggplot2::labs(
+    title = 'Group-Time ATT for CVDP001AF',
+    subtitle = glue::glue(""),
+    x = 'CVDPREVENT reporting period ID',
+    y = 'Average Treatment Effect in the Treated (ATT) per period'
+  ) +
+  ggplot2::scale_colour_manual(
+    labels = c('Pre', 'Post'),
+    values = c('#9E9E9E', '#0072CE')
+  )
+```
+
+```{r}
+# look at the Wald test for parallel trends
+did_console <- 
+  summary(did) |> 
+  capture.output()
+
+did_pt <- did_console[grepl("P-value for pre-test", did_console)]
+```
+
+`r did_pt`
+
+Guide to interpretation:
+
+-   Review pre-period parallel trends assumption - is there any evidence this should be rejected? Do all confidence intervals cross zero? What about the Wald test reported in the summary call?
+
+-   Look for periods where confidence interval does not cross zero. This is strong evidence of divergence of the intervention group away from the control group. Is this a positive or negative divergence?
+
+-   Look at the trend in the ATT, is it upward or downward? Look at this with and without reference to the confidence interval, is there an indicative trend either way? While not conclusive this could be indicative of a latent shift in outcomes for the intervention group.
+
+-   If there are multiple groups due to different start dates, then any finding determined above could be analysed by an event study plot (see tab).
+
+#### DiD table
+
+```{r}
+# display the results as a table
+did::tidy(did) |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  # add in the year-month
+  dplyr::left_join(
+    y = df_did_data |> 
+      dplyr::select(time_period_id, year_month) |> 
+      dplyr::distinct(),
+    by = dplyr::join_by(time == time_period_id)
+  ) |> 
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    ),
+    # flag periods before / after the intervention
+    period = dplyr::case_when(
+      time < group ~ 'Pre',
+      .default = 'Post'
+    )
+  ) |> 
+  dplyr::relocate(year_month, .before = 1) |> 
+  dplyr::relocate(period, .after = time) |> 
+  gt::gt() |> 
+  #gt::cols_hide(columns = c(group)) |> 
+  gt::cols_label(
+    group = 'Group',
+    year_month = 'Month',
+    time = 'ID',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance',
+    period = 'Pre/Post'
+  ) |> 
+  gt::tab_spanner(
+    label = 'Time period',
+    columns = c(time, year_month, period)
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'Time period'),
+    footnote = gt::md('Time period details. *ID*: a number used in the CVDPREVENT audit identifyng the time period. *Month*: the month the report data was published. *Pre/Post*: identifies whether the time period is before or after the start of the intervention')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+```
+
+#### Simple aggregation
+
+This is a weighted average of all group-time average treatment effects, with weight proportional to the group size.
+
+```{r}
+
+did::aggte(did, type = 'simple', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+
+```
+
+> This aggregation immediately avoids the negative weights issue that two-way fixed effects regression can suffer from ... \[however\] this simple aggregation tends to overweight the effect of early-treated groups simply because we observe more of them during post-treatment periods.
+
+[Simple aggregation](https://bcallaway11.github.io/did/articles/did-basics.html#simple-aggregation)
+
+### Event-study
+
+#### Event study plot
+
+It can be challenging to plot and analyse situations where there are multiple treatment groups which are treated at different times. A solution to this requirement is the event study plot.
+
+An event study aligns treatment groups on the start of their intervention with time periods set in reference to this 'start' period. Thus time points leading up to the intervention are set as negative numbers and those after the intervention as positive numbers.
+
+In this way the overall effect of multiple intervention groups can be combined without the difficulty of the staggered
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 8
+#| fig_cap: Average group-time difference-in-differences for CVDP001AF
+did_event <- did::aggte(did, type = 'dynamic', na.rm = TRUE)
+did::ggdid(did_event) +
+  ggplot2::labs(
+    title = 'Event-Study ATT for CVDP001AF',
+    subtitle = 'Average effect by length of exposure',
+    x = 'Event time - relative to intervention start',
+    y = 'Average Treatment Effect in the Treated (ATT) per period'
+  ) +
+  ggplot2::scale_colour_manual(
+    labels = c('Pre', 'Post'),
+    values = c('#9E9E9E', '#0072CE')
+  )
+```
+
+> One of the most common alternative approaches is to aggregate group-time effects into an event study plot.
+
+[Dynamic effects and event studies](https://bcallaway11.github.io/did/articles/did-basics.html#dynamic-effects-and-event-studies)
+
+##### Group-specific effects
+
+```{r}
+#| warning: false
+
+did::aggte(did, type = 'group', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+
+
+```
+
+##### Group-specific effects plot
+
+This plot shows the average effect of participating in the intervention experienced across all GP practices in any period.
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 4
+#| fig_cap: Group-specific effects plot
+did::aggte(did, type = 'group', na.rm = TRUE) |> 
+  did::ggdid() +
+  ggplot2::labs(
+    x = 'Average Treatment Effect in the Treated (ATT)',
+    y = 'Group'
+  ) +
+  ggplot2::scale_colour_manual(values = c('#f9bf07')) +
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(colour = 'black'),
+    axis.title = ggplot2::element_text(colour = 'black')
+  )
+```
+
+In this figure the y-axis is categorised by group (defined by the time period the intervention started). The x-axis shows the estimated average effect of participating in the intervention for practices in each group averaged across *all time periods* after that group becomes treated.
+
+> In our view, this parameter is a leading choice as an overall summary effect of participating in the treatment.
+
+[Group-Specific effects](https://bcallaway11.github.io/did/articles/did-basics.html#group-specific-effects)
+
+##### Average effect by time period
+
+This is a plot aggregating ATT effects across time periods.
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 4
+#| fig_cap: Average effect by time period
+
+did::aggte(did, type = 'calendar', na.rm = TRUE) |> 
+  did::ggdid()
+```
+
+In this figure, the x-axis is the time period and the estimates along the y-axis are the average effect of participating in the intervention in a particular time period for all participating practices.
+
+```{r}
+#| warning: false
+
+did::aggte(did, type = 'calendar', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+```
+:::
+
+## CVDP007AF - Anti-coagulant treatment
+
+This metric looks at the proportion of people with GP recorded AF and are high risk who are being treated with an anticoagulant.
+
+The data for this comes directly from the CVDPREVENT audit website, where data is available at GP practice level.
+
+::: panel-tabset
+### Time series
+
+A time series view of metric performance, with a plot each showing the `value` (performance against the metric), alongside the `numerator` and the `denominator`, used in the calculation of the `value`.
+
+```{r}
+#| fig_cap: 'CVDP007AF metric details by reporting period'
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 10
+
+# summarise data for the first metric, facetting on value, numerator and denominator 
+df_did_data_transformed <- 
+  df_did_data |> 
+  # limit to a single metric
+  dplyr::filter(indicator_id == 7) |>
+  dplyr::mutate(
+    flag_intervention_f = dplyr::case_match(
+      flag_intervention,
+      1 ~ 'Intervention',
+      0 ~ 'Control'
+    ) |> 
+      forcats::fct(levels = c('Intervention', 'Control'))
+  ) |> 
+  # summarise by group and time
+  dplyr::summarise(
+    dplyr::across(
+      dplyr::any_of(c('value', 'numerator', 'denominator')),
+      list(
+        mean = ~ mean(.x, na.rm = TRUE), 
+        upper = ~ mean(.x, na.rm = TRUE) + sd(.x, na.rm = TRUE),
+        lower = ~ mean(.x, na.rm = TRUE) - sd(.x, na.rm = TRUE)
+      )
+    ),
+    .by = c(indicator_short_name, time_period_id, year_month, 
+            flag_intervention_f)
+  ) |> 
+  # pivot longer to make value, num & denom their own series
+  tidyr::pivot_longer(
+    cols = dplyr::any_of(
+      dplyr::starts_with(c('value_', 'numerator_', 'denominator_'))
+    ),
+    names_to = c('measurement', 'measurement_stat'),
+    names_pattern = "(.*)_(.*)",
+    values_to = 'value'
+  ) |> 
+  # pivot wider to put stats on the same row as their measurement
+  tidyr::pivot_wider(
+    names_from = dplyr::any_of(c('measurement_stat')),
+    values_from = value
+  ) |> 
+  # convert measurements to a factor to ensure consistent ordering
+  dplyr::mutate(
+    measurement = measurement |> 
+      forcats::fct(levels = c('value', 'numerator', 'denominator'))
+  ) |> 
+  # arrange the data to plot interventions above controls
+  dplyr::arrange(flag_intervention_f)
+```
+
+```{r}
+#| fig-cap: 'CVDP001AF metric details by reporting period'
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 10
+
+# plot the time series
+
+p <- plot_cvd_metric_timeseries_overall_v2(
+  df = df_did_data_transformed,
+  df_project = df_project,
+  str_metric = 'CVDP007AF'
+)
+p
+```
+
+The CVDPREVENT reporting periods are shown along the x-axis. These have typically followed a quarterly reporting frequency though there is a gap noticeable between June and December 2023 where no metrics at GP practice level were published. The time frame runs from March 2022 to September 2024 (the latest available data at the time of writing).
+
+There are two groups in each plot:
+
+-   shown in blue is the `Intervention` group comprising practices in whose population the DPP activity was focussed, and
+
+-   shown in grey is the `Control` group comprising practices unaffected by DPP funding and which were matched with practices in the intervention group (see @sec-matching).
+
+The focus of each plot is a point-range where the point represents the average (mean) value for each group in the time period and the range represents one standard deviation above and below.
+
+Note, the intervention and control groups report at the same time in the CVDPREVENT audit data, but have been offset in this plot to avoid overlap so that the point-ranges can be clearly seen.
+
+The dotted line represents the start of activities as part of the DPP funding. This line divides activity into a pre-intervention and a post-intervention period. NB, some short-listed projects had not completed their DPP activity by September 2024 so their impact is only partially represented in these metrics.
+
+### Definitions
+
+#### Topic
+
+Percentage of patients aged 18 and over with GP recorded atrial fibrillation (AF) and a record of CHADS2 or CHA2DS2-VASc score of 2 or more, who have received a prescription for any oral anticoagulation drug therapy in the preceding 6 months.
+
+#### Denominator
+
+Total number of patients aged 18 and over, with GP recorded AF and no record of resolution, at a high risk of stroke (CHADS2 or CHA2DS2-VASc score is greater than or equal to 2).
+
+#### Numerator
+
+Of the denominator, number of patients who have received a prescription for any oral anticoagulation drug therapy in the preceding 6 months.
+
+#### Value
+
+Proportion (Numerator / Denominator) as a percent.
+
+#### Notes
+
+Suppressed sub-national counts between 1 and 7.
+
+Rounding to the nearest five for Numerator and Denominator.
+
+### DiD About
+
+To evaluate the effect of an intervention we need to estimate the average effect on practices where the intervention was administered, rather than the effects on the whole population. The Average Treatment effect in the Treated (ATT) is the measure we look at in these causal analyses, representing the average change in outcome for those who received the intervention.
+
+The [{did}](https://bcallaway11.github.io/did/) package was used to conduct the difference-in-differences in this analysis. The reasons for this include:
+
+-   the ability to examine more than two time periods. This means we can explore more than the binary pre- and post- intervention periods available in the 'classic' DiD analysis, and look at the range of outcomes over different time available from the CVDPREVENT audit,
+
+-   The dates when DPP activity began varies project-by-project, which represents a problem under the 'classic' DiD analysis. However, the {did} package can handle multiple start periods making consolidation of the findings from multiple projects possible.
+
+Estimates of treatment effect by {did} do not suffer any drawback associated with two-way fixed effects regressions or event study regressions when there are multiple periods and / or variation in treatment timing. [@callaway2021]
+
+The main outcomes from this analysis are *group-time average treatment effects*. These are the average treatment effect for a particular group (defined by when the group's intervention began) in a particular time period.
+
+### Time periods
+
+The CVDPREVENT audit typically publishes data monthly along with a Time Period ID that uniquely identifies each reporting period.
+
+The month name was used in the time-series analyses as the most intuitive way of displaying the dimension of time.
+
+For the Difference-in-Differences analysis we have used the Time Period ID to represent the dimension of time to facilitate statistical analysis. This is because the {did} [@callaway2021] statistical package requires a whole number (integer) to represent the time dimension.
+
+Below is a lookup table between report month and time period id to make cross-referencing findings between these two analyses easier.
+
+```{r}
+#| fig-cap: Lookup between CVDPREVENT report month and time period ID
+
+df_did_data_transformed |> 
+  dplyr::select(year_month, time_period_id) |> 
+  dplyr::distinct() |> 
+  dplyr::arrange(year_month) |> 
+  gt::gt() |> 
+  gt::tab_options(quarto.disable_processing = TRUE) |> 
+  gt::cols_label(
+    year_month = "Month",
+    time_period_id = "Time Period ID"
+  )
+```
+
+Projects began their interventions at different times with some starting as early as June 2023 and others much later in August 2024. This poses challenges in evaluating impact because there is no single implementation date after which we can assume the outcomes are influenced by the activities.
+
+To tackle this, projects are grouped together on the reporting month they started their interventions and are assessed separately.
+
+To help decode some of the DiD analyses here is a table collating projects by the earliest reporting month their results could be assumed to influence.
+
+```{r}
+#| fig-cap: CVDPREVENT report month and time period ID along with a list of projects starting DPP activities that period
+
+df_temp <-
+  df_did_data_transformed |> 
+  dplyr::select(year_month, time_period_id) |>
+  dplyr::mutate(year_month_period = glue::glue("{year_month} ID:{time_period_id}")) |> 
+  dplyr::distinct() |> 
+  dplyr::arrange(year_month) |> 
+  dplyr::left_join(
+    y = temp_proj_summary |> 
+      dplyr::select(
+        time_period_id, 
+        grant_id,
+        initiative_title,
+        dpp_category,
+        practice_assignment,
+        practice_count
+      ),
+    by = dplyr::join_by(time_period_id == time_period_id)
+  ) |> 
+  dplyr::filter(!is.na(grant_id))
+
+df_temp |> 
+  dplyr::group_by(year_month_period) |> 
+  gt::gt(
+    #rowname_col = "test",
+    row_group_as_column = TRUE
+  ) |> 
+  gt::cols_hide(c(year_month, time_period_id)) |> 
+  gt::cols_label(
+    grant_id = 'Project code',
+    initiative_title = 'Title',
+    dpp_category = 'DPP category',
+    practice_assignment = 'GP assignment method',
+    practice_count = 'Practices covered'
+  ) |> 
+  gt::tab_options(quarto.disable_processing = TRUE)
+```
+
+NB, some projects have overlapping geographical areas, meaning the GP practices involved are subject to more than one DPP initiative.
+
+Rather than double-counting practices where they are potentially impacted by more than one project, which would give greater weight to some GP practices and less weight to others, we have chosen to count practices once each.
+
+What this means is that where a GP practice is part of more than one DPP project then the intervention date, which is the date which can consider DPP activities started, is taken to be the earliest date for the relevant projects.
+
+The result is that some of the start dates in the above table are not shown separately in the following analyses.
+
+The majority of projects (n=`r ra$month_most_projects_count`) began their DPP activities in time for the `r ra$month_most_projects` reports (time period = `r ra$month_most_projects_timeid`), representing `r ra$month_most_practices` GP practices.
+
+### DiD
+
+#### Difference-in-difference analysis
+
+```{r}
+# perform the difference-in-difference analysis
+# to get a group-time ATT
+set.seed(123)
+did <- 
+  df_did_data |> 
+    dplyr::filter(indicator_id == 7) |> 
+    did::att_gt(
+      yname = 'value',
+      tname = 'time_period_id',
+      idname = 'id',
+      gname = 'treated_time_period_id',
+      xformla = NULL, # no covariates as these are controlled for
+      allow_unbalanced_panel = TRUE, # cover missing outcomes
+      control_group = 'notyettreated',
+      bstrap = TRUE,
+      data = _ # inherit the data from the above pipe
+    )
+```
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 20
+#| fig_cap: Group-Time difference-in-differences
+
+# display the results as chart
+did::ggdid(did) +
+  ggplot2::labs(
+    title = 'Group-Time ATT for CVDP007AF',
+    #subtitle = glue::glue(""),
+    x = 'CVDPREVENT reporting period ID',
+    y = 'Average Treatment Effect in the Treated (ATT) per period'
+  ) +
+  ggplot2::scale_colour_manual(
+    labels = c('Pre', 'Post'),
+    values = c('#9E9E9E', '#0072CE')
+  )
+```
+
+```{r}
+# look at the Wald test for parallel trends
+did_console <- 
+  summary(did) |> 
+  capture.output()
+
+did_pt <- did_console[grepl("P-value for pre-test", did_console)]
+```
+
+`r did_pt`
+
+Guide to interpretation:
+
+-   Review pre-period parallel trends assumption - is there any evidence this should be rejected? Do all confidence intervals cross zero? What about the Wald test reported in the summary call?
+
+-   Look for periods where confidence interval does not cross zero. This is strong evidence of divergence of the intervention group away from the control group. Is this a positive or negative divergence?
+
+-   Look at the trend in the ATT, is it upward or downward? Look at this with and without reference to the confidence interval, is there an indicative trend either way? While not conclusive this could be indicative of a latent shift in outcomes for the intervention group.
+
+-   If there are multiple groups due to different start dates, then any finding determined above could be analysed by an event study plot (see tab).
+
+#### DiD table
+
+```{r}
+# display the results as a table
+did::tidy(did) |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  # add in the year-month
+  dplyr::left_join(
+    y = df_did_data |> 
+      dplyr::select(time_period_id, year_month) |> 
+      dplyr::distinct(),
+    by = dplyr::join_by(time == time_period_id)
+  ) |> 
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    ),
+    # flag periods before / after the intervention
+    period = dplyr::case_when(
+      time < group ~ 'Pre',
+      .default = 'Post'
+    )
+  ) |> 
+  dplyr::relocate(year_month, .before = 1) |> 
+  dplyr::relocate(period, .after = time) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    group = 'Group',
+    year_month = 'Month',
+    time = 'ID',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance',
+    period = 'Pre/Post'
+  ) |> 
+  gt::tab_spanner(
+    label = 'Time period',
+    columns = c(time, year_month, period)
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'Time period'),
+    footnote = gt::md('Time period details. *ID*: a number used in the CVDPREVENT audit identifyng the time period. *Month*: the month the report data was published. *Pre/Post*: identifies whether the time period is before or after the start of the intervention')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+```
+
+#### Simple aggregation
+
+This is a weighted average of all group-time average treatment effects, with weight proportional to the group size.
+
+```{r}
+
+did::aggte(did, type = 'simple', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+
+```
+
+> This aggregation immediately avoids the negative weights issue that two-way fixed effects regression can suffer from ... \[however\] this simple aggregation tends to overweight the effect of early-treated groups simply because we observe more of them during post-treatment periods.
+
+[Simple aggregation](https://bcallaway11.github.io/did/articles/did-basics.html#simple-aggregation)
+
+### Event-study
+
+#### Event study plot
+
+It can be challenging to plot and analyse situations where there are multiple treatment groups which are treated at different times. A solution to this requirement is the event study plot.
+
+An event study aligns treatment groups on the start of their intervention with time periods set in reference to this 'start' period. Thus time points leading up to the intervention are set as negative numbers and those after the intervention as positive numbers.
+
+In this way the overall effect of multiple intervention groups can be combined without the difficulty of the staggered
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 8
+#| fig_cap: Average group-time difference-in-differences
+did_event <- did::aggte(did, type = 'dynamic', na.rm = TRUE)
+did::ggdid(did_event) +
+  ggplot2::labs(
+    title = 'Event-Study ATT for CVDP007AF',
+    subtitle = 'Average effect by length of exposure',
+    x = 'Event time - relative to intervention start',
+    y = 'Average Treatment Effect in the Treated (ATT) per period'
+  ) +
+  ggplot2::scale_colour_manual(
+    labels = c('Pre', 'Post'),
+    values = c('#9E9E9E', '#0072CE')
+  )
+```
+
+> One of the most common alternative approaches is to aggregate group-time effects into an event study plot.
+
+[Dynamic effects and event studies](https://bcallaway11.github.io/did/articles/did-basics.html#dynamic-effects-and-event-studies)
+
+##### Group-specific effects
+
+```{r}
+#| warning: false
+
+did::aggte(did, type = 'group', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+
+
+```
+
+##### Group-specific effects plot
+
+This plot shows the average effect of participating in the intervention experienced across all GP practices in any period.
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 4
+#| fig_cap: Group-specific effects plot
+did::aggte(did, type = 'group', na.rm = TRUE) |> 
+  did::ggdid() +
+  ggplot2::labs(
+    x = 'Average Treatment Effect in the Treated (ATT)',
+    y = 'Group'
+  ) +
+  ggplot2::scale_colour_manual(values = c('#f9bf07')) +
+  ggplot2::theme(
+    plot.title = ggplot2::element_text(colour = 'black'),
+    axis.title = ggplot2::element_text(colour = 'black')
+  )
+```
+
+In this figure the y-axis is categorised by group (defined by the time period the intervention started). The x-axis shows the estimated average effect of participating in the intervention for practices in each group averaged across *all time periods* after that group becomes treated.
+
+> In our view, this parameter is a leading choice as an overall summary effect of participating in the treatment.
+
+[Group-Specific effects](https://bcallaway11.github.io/did/articles/did-basics.html#group-specific-effects)
+
+##### Average effect by time period
+
+This is a plot aggregating ATT effects across time periods.
+
+```{r}
+#| warning: false
+#| fig-dpi: 600
+#| fig-format: png
+#| fig-height: 4
+#| fig_cap: Average effect by time period
+
+did::aggte(did, type = 'calendar', na.rm = TRUE) |> 
+  did::ggdid()
+```
+
+In this figure, the x-axis is the time period and the estimates along the y-axis are the average effect of participating in the intervention in a particular time period for all participating practices.
+
+```{r}
+#| warning: false
+
+did::aggte(did, type = 'calendar', na.rm = TRUE) |> 
+  did::tidy() |> 
+  dplyr::select(-dplyr::starts_with(c('term', 'point.'))) |>
+  dplyr::mutate(
+    # flag periods where the confidence limit does not cover 0
+    significant = dplyr::case_when(
+      conf.low < 0 & conf.high < 0 ~ TRUE,
+      conf.low > 0 & conf.high > 0 ~ TRUE,
+      .default = FALSE
+    )
+  ) |> 
+  gt::gt() |> 
+  gt::cols_label(
+    type = 'Type',
+    estimate = 'Estimate',
+    std.error = 'SE',
+    conf.low = 'Lower',
+    conf.high = 'Upper',
+    significant = 'Significance'
+  ) |> 
+  gt::tab_spanner(
+    label = 'ATT',
+    columns = c(estimate, std.error)
+  ) |> 
+  gt::tab_spanner(
+    label = '95% Confidence Interval',
+    columns = c(conf.low, conf.high, significant)
+  ) |> 
+  gt::fmt_number(
+    columns = c(estimate, std.error, conf.low, conf.high),
+    decimals = 4
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = 'ATT'),
+    footnote = gt::md('Average Treatment Effect in the Treated (ATT). This is the average of the individual treatment effects for GP practices in this project. Figures are for the point estimate (*Estimate*) and the standard error (*SE*).')
+  ) |> 
+  gt::tab_footnote(
+    locations = gt::cells_column_spanners(spanners = '95% Confidence Interval'),
+    footnote = gt::md('A range of values with 95% probability that contains the *true* value of the ATT estimates. Figures are for the *Lower* and *Upper* end of this range and a *Signficance* value that is TRUE when the confidence interval does not cover zero and indicates a statistically significant finding.')
+  ) |> 
+  gt::tab_options(
+    quarto.disable_processing = TRUE,
+    table.align = 'left'
+  ) |> 
+  # highlight rows where finding is significant
+  gtExtras::gt_highlight_rows(
+    columns = gt::everything(),
+    rows = significant == TRUE,
+    fill = '#0072CE',
+    alpha = 0.1,
+    font_weight = 'normal'
+  )
+```
+:::
