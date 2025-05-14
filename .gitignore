@@ -87,3 +87,7 @@ venv.bak/
 # Rendered quarto files
 *.html
 *_files/
+
+# Folders not for git
+*_reports/
+data/
