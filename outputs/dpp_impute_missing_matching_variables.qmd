@@ -1,0 +1,383 @@
+---
+title: "Imputing Matching Variables"
+subtitle: "Assessing missingness in variables used in matching GP practices"
+author: "Craig Parylo"
+date: 2025-01-27
+
+title-block-banner: '#151412'
+format:
+  html:
+    toc: true
+    toc-depth: 4
+    code-fold: true
+    embed-resources: true
+    fig-format: svg
+    fig-width: 10
+    fig-height: 3
+    fig-dpi: 600
+    default-image-extension: svg
+    lightbox: true
+    editor: visual
+brand: _brand.yml
+css: styles.css
+---
+
+```{r setup}
+.libPaths(new = "C:/Users/craig.parylo/AppData/Local/Programs/R/R-4.4.2/library")
+
+# libraries
+
+# data 
+df_matching_missing <- readRDS(file = here::here('data', 'matching', 'df_matching_missing.Rds'))
+
+# df_cvd <- readRDS(file = here::here('data', 'cvd_prevent', 'cvd_prevent.Rds'))
+
+matching_variables <- c(
+  'adults_male_prop',
+  'adults_65_plus_prop',
+  'patients_per_clinician',
+  'deprivation_score',
+  'diabetes_prevalence',
+  'hypertension_prevalence',
+  'obesity_prevalence',
+  'rural_code'
+)
+
+# remove outcome variables and tidy data
+df_matching_missing <- 
+  df_matching_missing |> 
+  dplyr::select(
+    -c(flag_outcome_post, flag_outcome_pre, flag_intervention)
+  ) |> 
+  # ensure all NA values are classed appropriately
+  dplyr::mutate(
+    patients_per_clinician = patients_per_clinician |> 
+      dplyr::na_if(Inf) |> 
+      dplyr::na_if(0),
+    rural_code = rural_code |> 
+      dplyr::na_if('NA') |> 
+      forcats::fct_drop()
+  )
+
+# colours
+chart_colours <- list(
+  'TRUE' = "#0072CE",
+  'FALSE' = "#FFB81C"
+)
+```
+
+# Current position
+
+There are missing values in the matching variables. A single missing value results in the whole record being omitted from the matching process.
+
+This process imputes these missing values to maximise the range of possible matching partners.
+
+Here is a summary of the data in our `df_matching_missing` data set:
+
+```{r}
+df_matching_missing |> 
+  dplyr::select(
+    dplyr::any_of(matching_variables)
+  ) |> 
+  gtsummary::tbl_summary(
+    statistic = list(
+      gtsummary::all_continuous() ~ '{median} quartiles: ({p25}, {p75}), [{min}, {max}]'
+    ),
+    missing_text = 'Missing',
+  )
+```
+
+The variables with missing data include:
+
+-   `rural_code` (missing for 19 practices)
+
+-   `patients_per_clinician` (missing for 18 practices)
+
+-   `diabetes_prevalence` (missing for 169 practices)
+
+-   `hypertension_prevalence` (missing for 169 practices)
+
+-   `obesity_prevalence` (missing for 169 practices)
+
+-   `deprivation_score` (missing for 180 practices)
+
+The matching data set has the following properties:
+
+There are patterns of missingness, with QoF variables tending to be missing together.
+
+```{r}
+#| fig-cap: Pattern of missing values for the matching data set
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 6
+#| fig-width: 7
+p <- mice::md.pattern(df_matching_missing, rotate.names = TRUE)
+p
+```
+
+# Matching
+
+Missing data will be imputed using the [{mice}](https://amices.org/mice/) package, which uses a procedure to 'fill in' missing data through an iterative series of predictive models. In each iteration the specified variables are imputed using other variables.
+
+::: callout-tip
+## Useful resources
+
+[Source code](https://github.com/amices/mice) and [vignettes](https://amices.org/mice/) for the {mice} package on GitHub
+
+The [MICE algorithm](https://cran.r-project.org/web/packages/miceRanger/vignettes/miceAlgorithm.html) - an explanation of the process used in {miceRanger}, a similar package to {mice}, which also uses `predictive mean matching` (PMM) to impute values.
+
+Companion book, '[Flexible Imputation of Missing Data](https://stefvanbuuren.name/fimd/)', second edition
+
+[Workshop](https://github.com/amices/Winnipeg) on handling missing data (lecture notes and exercises) by the author of the {mice} package.
+:::
+
+The imputation processes in {mice} rely on correlation between variables so that missing values can be estimated using known values with a given relationship.
+
+## Correlation {#sec-correlation}
+
+Here we review the pairwise correlations in the matching variables:
+
+```{r}
+#| fig-cap: Pairwise correlation coefficients between matching variables
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 6
+#| fig-width: 7
+df_matching_missing |> 
+  dplyr::select(dplyr::any_of(matching_variables), -rural_code, adults_headcount) |> 
+  stats::cor(use = 'pairwise.complete.obs') |> 
+  corrplot::corrplot(method = 'number', order = 'AOE', diag = FALSE)
+```
+
+Strong positive relationships are visible, notably between hypertension and the proportion of adults aged 65+ years (0.86 correlation coefficient) as well as some negative relationships, for example between deprivation score (the [larger the score](https://www.gov.uk/government/statistics/english-indices-of-deprivation-2019) the more deprived the area) and proportion of adults aged 65+ years (-0.43 correlation coefficient).
+
+Both positive and negative correlations are useful in the imputation of missing values.
+
+## Matching method
+
+{mice} can suggest methods for imputing missing data based on the type of data each variable holds.
+
+```{r}
+#| warning: false
+# let mice suggest a matching method for each variable
+# NB, turning off warnings to prevent complaints about constant variables - e.g. prac_code, practice_name, and practice_postcode - these warnings are available via `init$loggedEvents`
+init <- mice::mice(df_matching_missing, maxit = 0)
+init$method |> 
+  tibble::enframe() |> 
+  dplyr::rename(
+    variable = name,
+    method = value
+  ) |> 
+  gt::gt()
+```
+
+In our case {mice} suggested two methods, `pmm` and `polyreg`:
+
+-   PMM, or [Predictive Mean Matching](https://stefvanbuuren.name/fimd/sec-pmm.html) is a technique where values are imputed using values from complete cases matched with respect to some metric, and is based on the assumption the distribution of the missing cell is the same as the observed data of the candidate donors.
+
+-   [POLYREG](https://stefvanbuuren.name/fimd/sec-categorical.html), a multinomial logit model estimated by `nnet::multinom()` used to determine distributions of categorical data.
+
+NB, no method was suggested for `adults_headcount`, `adults_male_prop` and `adults_65_plus_prop` as these fields are fully complete, and `prac_code`, `prac_name` and `practice_postcode` are not values we wish to impute data for.
+
+## Predictor selection
+
+Not all variables are helpful when imputing missing data, see section on correlation (@sec-correlation). Here we select donor variables based on stronger correlations, set here as greater than 0.2 correlation coefficient.
+
+```{r}
+#| fig_cap: Predictor variables
+
+# define a minimum correlation coefficient
+min_cor <- 0.25
+
+predictors <- mice::quickpred(
+  df_matching_missing |> 
+    dplyr::select(dplyr::any_of(matching_variables)
+  ), 
+  mincor = min_cor
+)
+predictors |> 
+  tibble::as_tibble(rownames = 'variable') |> 
+  gt::gt() |> 
+  gt::cols_label(
+    variable = 'variable to be imputed',
+    adults_male_prop = 'adults male prop',
+    adults_65_plus_prop = 'adults 65+ prop',
+    patients_per_clinician = 'patients per clinician',
+    deprivation_score = 'deprivation score',
+    diabetes_prevalence = 'diabetes prevalence',
+    hypertension_prevalence = 'hypertension prevalence',
+    obesity_prevalence = 'obesity prevalence',
+    rural_code = 'rural code'
+  ) |> 
+  gt::data_color(
+    method = 'numeric',
+    palette = c('white', '#40739e')
+  )
+```
+
+The variables to have their missing values imputed are listed in the first column. Reading from left to right the predictor variables to be used in the imputation are highlighted. For example, `patients_per_clinician` will be imputed using `adults_male_prop`, `adults_65+_prop` and `hypertension_prevalence`.
+
+NB, `adults_male_prop` and `adults_65_plus_prop` are fully complete and therefore do not need imputing so no other variable is marked for use in their imputation.
+
+## Imputation
+
+```{r}
+#| echo: false
+#| message: false
+#| warning: false
+#| include: false # hides any console output
+#| cache: true
+# re-do predictors involving *all* variables in the dataset (as I get an  error message otherwise)
+predictors <- mice::quickpred(
+  df_matching_missing, 
+  mincor = min_cor
+)
+
+# calculate the imputed values
+imputed <- mice::mice(
+  data = df_matching_missing, # data to be used
+  m = 40,                     # number of multiple imputations (dflt = 5)
+  method = init$method,       # matching method - will go with default
+  pred = predictors,          # use the predictors with 0.2 corr coef
+  seed = 123,                 # for reproducibility
+  maxit = 10,                 # 10 iterations (default = 5)
+)
+```
+
+> One of the best tools to assess the plausibility of imputations is to study the discrepancy between the observed and imputed data. The idea is that good imputations have a distribution similar to the observed data. In other words, the imputations could have been real values had they been observed.
+
+[Section 6.6.6 Diagnostic graphs](https://stefvanbuuren.name/fimd/sec-diagnostics.html)
+
+::: panel-tabset
+## Convergence
+
+There is good indication of convergence in the imputed data (the streams are intermixed with no obvious signs of trends in the latter iterations).
+
+```{r}
+#| fig_cap: Assessing convergence in imputed values
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 3
+plot(imputed, layout = c(2,1))
+```
+
+> There is no clear-cut method for determining when the MICE algorithm has converged. It is useful to plot one or more parameters against the iteration number.
+>
+> On convergence, the different streams should be freely intermingled with one another, without showing any definite trends.
+
+[Chapter 6.5.2 Convergence](https://stefvanbuuren.name/fimd/sec-algoptions.html#sec:convergence)
+
+## Density
+
+These distributions are fairly good matches.
+
+There is some left-shift for hypertension_prevalence and obesity_prevalence, i.e. there is a lower proportion of these in the practices with missing values, and a right-shift in deprivation_score, i.e. there is greater deprivation in practices with missing values.
+
+```{r}
+#| fig_cap: Assessing density between missing and non-missing values
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 4
+mice::densityplot(
+  x = imputed, 
+  layout = c(1, 1),
+  data = ~ patients_per_clinician + deprivation_score + diabetes_prevalence + hypertension_prevalence + obesity_prevalence + rural_code
+)
+
+```
+
+Density estimates for the marginal distributions of the observed data (blue) and the `m = 5` densities per variable calculated from the imputed data (red lines).
+
+> Interpretation \[of density plots\] is more difficult if there are discrepancies. Such discrepancies may be caused by a bad imputation model, by a missing data mechanism that is not MCAR (missing completely at random) or by a combination of both.
+
+[Chapter 6.6.2 Diagnostic graphs](https://stefvanbuuren.name/fimd/sec-diagnostics.html)
+
+## Strip
+
+```{r}
+#| fig_cap: Assessing distributions between missing and non-missing values
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 4
+mice::bwplot(
+  x = imputed, 
+  data = patients_per_clinician + deprivation_score + diabetes_prevalence + hypertension_prevalence + obesity_prevalence ~ as.factor(.imp),
+  layout = c(1, 1)
+  )
+```
+:::
+
+## Complete the data
+
+The dataset now has a full set of data across the matching variables, ready to be used in the matching process.
+
+```{r}
+#| fig_cap: Assessing missingness in imputed dataset
+#| fig-format: png
+#| fig-dpi: 600
+#| fig-height: 3
+#| echo: false
+#| message: false
+# complete the data
+df_match_filled <- mice::complete(imputed)
+
+# store for later use
+saveRDS(
+  object = df_match_filled,
+  file = here::here('data', 'matching', 'df_matching_imputed.Rds')
+)
+
+# show the missingness
+mice::md.pattern(df_match_filled, rotate.names = TRUE)
+```
+
+# Reporting summary
+
+```{r}
+
+# produce some summary figures
+df_missing_glimpse <-
+  df_matching_missing |> 
+  finalfit::missing_glimpse() |> 
+  dplyr::mutate(missing_percent = as.numeric(missing_percent) / 100)
+
+# variable with lowest missingness
+txt_var_missing_min <- 
+  min(df_missing_glimpse$missing_percent) |> 
+  scales::percent(accuracy = 1)
+
+# variable with greatest missingness
+txt_var_missing_max <-
+  max(df_missing_glimpse$missing_percent) |> 
+  scales::percent(accuracy = 0.1)
+
+# total records (GP practices)
+txt_rec_total <- 
+  df_matching_missing |> 
+  dplyr::summarise(
+    rows = dplyr::n()
+  ) |> 
+  dplyr::pull(rows)
+
+# total records with at least one missing case (potentially excluded)
+txt_rec_missing <- 
+  df_matching_missing |> 
+  dplyr::filter(
+    dplyr::if_any(
+      dplyr::everything(), is.na
+    )
+  ) |> 
+  dplyr::summarise(
+    rows = dplyr::n()
+  ) |> 
+  dplyr::pull(rows)
+
+```
+
+The percentage of missing values across the eight matching variables varied between `r txt_var_missing_min` and `r txt_var_missing_max`. In total, `r txt_rec_missing` of `r txt_rec_total` (`r (txt_rec_missing / txt_rec_total) |> scales::percent(accuracy = 0.1)`) records were incomplete.
+
+Many GP practices had no deprivation score because they were established after April 2019, when the population weighted deprivation profiles for practices were last published. Some practices have no published QoF scores for obesity, hypertension and diabetes possibly because these these practices may be newer than the snapshot taken in April 2023, or did not have any patients with these conditions to report, or that participation in QoF is voluntary with around [97% of practices](https://digital.nhs.uk/data-and-information/publications/statistical/quality-and-outcomes-framework-achievement-prevalence-and-exceptions-data/2023-24/frequently-asked-questions) participating, including these practices.
+
+We used multiple imputation to create and analyse 40 multiply imputed datasets. Methodologists currently regard multiple imputation as a state-of-the-art technique because it improves accuracy and statistical power relative to other missing data techniques. Incomplete variables were imputed under fully conditional specification, using the default settings of the `mice` 3.0 package (Van Buuren and Groothuis-Oudshoorn [2011](https://stefvanbuuren.name/fimd/references.html#ref-VANBUUREN2011B)).
+
+The parameters of substantive interest were estimated in each imputed dataset separately, and combined using Rubin’s rules.
