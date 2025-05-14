@@ -48,9 +48,10 @@ Details on how to perform each step are provided below.
 
 ### Installing dependencies
 
-Run the `get_dependencies.R` script to identify the packages used within
-this analysis. NB, this file requires at least `renv`, `janitor` and
-`dplyr` to first be installed on your system to run.
+Run the [`get_dependencies.R`](scripts/get_dependencies.R) script to
+identify the packages used within this analysis. NB, this file requires
+at least `renv`, `janitor` and `dplyr` to first be installed on your
+system to run.
 
 ### Matching data
 
@@ -84,24 +85,28 @@ These data for these variables need to be downloaded.
 
 - Get a list of GP practice details from the
   [ODS](https://www.odsdatasearchandexport.nhs.uk/) API using
-  `get_gp_details.R`
+  [`get_gp_details.R`](scripts/get_gp_details.R)
 
 - Get monthly details of GP practice registered populations from [NHS
   Digital](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice)
-  using `get_gp_registered_patients.R`
+  using
+  [`get_gp_registered_patients.R`](scripts/get_gp_registered_patients.R)
 
 - Process this data to extract out relevant details using
-  `get_gp_population_summary.R`
+  [`get_gp_population_summary.R`](scripts/get_gp_population_summary.R)
 
-- Get matching data from Fingertips using `data_fingertips.R`
+- Get matching data from Fingertips using
+  [`data_fingertips.R`](scripts/data_fingertips.R)
 
 - Download [GP workforce
   data](https://digital.nhs.uk/data-and-information/publications/statistical/general-and-personal-medical-services/30-april-2023)
   for April 2023
 
-- Process GP workforce information using `get_gp_workforce.R`
+- Process GP workforce information using
+  [`get_gp_workforce.R`](scripts/get_gp_workforce.R)
 
-- Process all the matching data using `get_matching_variables_df.R`
+- Process all the matching data using
+  [`get_matching_variables_df.R`](scripts/get_matching_variables_df.R)
 
 ### Outcome data
 
@@ -113,7 +118,94 @@ Use the `get_cvd_data.R` script to download the data.
 ### Impute missing matching data
 
 - Investigate the amount of missing data using
-  `dpp_matching_variables_missingness.qmd`
+  [`dpp_matching_variables_missingness.qmd`](outputs/dpp_matching_variables_missingness.qmd)
 
 - Perform multiple imputation to ‘fill-in’ missing matching data using
-  `dpp_impute_missing_matching_variables.qmd`
+  [`dpp_impute_missing_matching_variables.qmd`](outputs/dpp_impute_missing_matching_variables.qmd)
+
+### Assign GP practices to projects
+
+GP practices are assigned to each funded intervention based on the
+geography specified as part of funding applications.
+
+- Get a [lookup from GP practice to PCN, CCG, ICB and NHS
+  Region](https://digital.nhs.uk/data-and-information/publications/statistical/patients-registered-at-a-gp-practice/august-2024)
+  from NHS Digital. Name this file `intervention_counterfac_lu.csv`.
+
+- Get a list of funded initiatives and their respective start / end
+  dates using
+  [`get_dpp_project_final_list.R`](scripts/get_dpp_project_final_list.R)
+  NB, this requires a copy of the funding application spreadsheet, which
+  is not currently publicly available.
+
+- Link funding applications with practices using
+  [`link_grants_with_practices.R`](scripts/link_grants_with_practices.R)
+  NB, this step is not possible without the above list of funding
+  applications.
+
+Some hospital-based projects have a unique list of practices or use a
+method of practice assignment which is based on dominant provider of
+care based on MSOA geography. To assign practices based on this approach
+you need to:
+
+- Download a [lookup of hospital catchment
+  areas](https://app.box.com/s/qh8gzpzeo1firv1ezfxx2e6c4tgtrudl)
+  produced by Office for Health Improvement and Disparities (OHID). NB,
+  this is the ‘2022 Trust Catchment Populations_Supplementary MSOA
+  Analysis.xlsx’ file.
+
+- Download a lookup from postcode to MSOA from the [Open Geography
+  Portal](https://open-geography-portalx-ons.hub.arcgis.com/datasets/ons::postcode-to-oa-2021-to-lsoa-to-msoa-to-lad-november-2024-best-fit-lookup-in-the-uk/about).
+
+- Use [`get_gps_per_hospital.R`](scripts/get_gps_per_hospital.R) to
+  produce catchment areas based on the dominant provider of care in each
+  MSOA, which are then linked with GP practices based on postcode to
+  MSOA lookup.
+
+### Matching and impact analyses
+
+The process of matching intervention GP practices with control GP
+practices and the impact analyses are done at national, case-study
+(aggregate) and case-study (individual) levels.
+
+- The national-level analysis can be reproduced using
+  [`dpp_programme_report_template.qmd`](outputs/dpp_programme_report_template.qmd).
+
+- The case-study (aggregate) analyses can be reproduced using
+  [`dpp_overall_report_template.qmd`](outputs/dpp_overall_report_template.qmd).
+
+- The individual case-study reports can all be reproduced using
+  [`dpp_gp_report_template.qmd`](outputs/dpp_gp_report_template.qmd).
+  Which project the template produces a report for is controlled by the
+  parameters set within the `yaml` header of the document:
+
+  - `project_id` controls which project is reported, using the ‘P’
+    nomenclature, where ‘P1’ is the ID for project 1.
+
+  - `alternate_data` is used where there are multiple ways of assigning
+    GP practices to the intervention area. Setting this to `FALSE` will
+    mean the default GP practice assignment method defined in
+    `link_grants_with_practices.R` is used. Setting to `TRUE` (default)
+    will use any alternative method of assignment, as detailed in the
+    `dpp_gp_report_template.qmd` script.
+
+  - `alternate_data_details` is used to specify which of multiple GP
+    practice assignment methods are to be used. Commonly used parameters
+    include “emergency” and “af”. “emergency” is used for hospital-based
+    projects to assign GP practices based on MSOAs where the hospital is
+    the dominant provider of emergency care. “af” is used for a single
+    project in which only GP practices which undertook activities to
+    improve care of atrial fibrillation are to be counted.
+
+  - `save_did` is used to control whether the underlying data is saved
+    for future use with the `calc_percentage_difference.R` script.
+
+``` yaml
+---
+params:
+    project_id: "P20"
+    alternate_data: TRUE
+    alternate_data_details: ""
+    save_did: TRUE
+---
+```
